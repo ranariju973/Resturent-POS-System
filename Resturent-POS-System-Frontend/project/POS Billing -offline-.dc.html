@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1517701550927-30cf4ba1dba5?w=280&h=280&fit=crop" data-resource-id="p1" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=280&h=280&fit=crop" data-resource-id="p2" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1515823064-d6e0c04616a7?w=280&h=280&fit=crop" data-resource-id="p3" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1626200419199-391ae4be7a41?w=280&h=280&fit=crop" data-resource-id="p4" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=280&h=280&fit=crop" data-resource-id="p5" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1547592166-23ac45744acd?w=280&h=280&fit=crop" data-resource-id="p6" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1547592180-85f173990554?w=280&h=280&fit=crop" data-resource-id="p7" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1513104890138-7c749659a591?w=280&h=280&fit=crop" data-resource-id="p8" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=280&h=280&fit=crop" data-resource-id="p9" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=280&h=280&fit=crop" data-resource-id="p10" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1603133872878-684f208fb84b?w=280&h=280&fit=crop" data-resource-id="p11" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=280&h=280&fit=crop" data-resource-id="p12" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1639024471283-03518883512d?w=280&h=280&fit=crop" data-resource-id="p13" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1550547660-d9450f859349?w=280&h=280&fit=crop" data-resource-id="p14" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1585032226651-759b368d7246?w=280&h=280&fit=crop" data-resource-id="p15" />
+<meta name="ext-resource-dependency" content="https://images.unsplash.com/photo-1607958996333-41aef7caefaa?w=280&h=280&fit=crop" data-resource-id="p16" />
+<meta name="ext-resource-dependency" content="https://api.iconify.design/lucide/chevron-down.svg?color=%238f8f8f&width=48&height=48" data-resource-id="chevDown" />
+<meta name="ext-resource-dependency" content="https://api.iconify.design/lucide/chevron-up.svg?color=%238f8f8f&width=48&height=48" data-resource-id="chevUp" />
+<template id="__bundler_thumbnail" data-bg-color="#f2f0eb">
+<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+<rect width="1200" height="800" fill="#f2f0eb"/>
+<rect x="80" y="80" width="640" height="640" rx="24" fill="#ffffff"/>
+<rect x="780" y="80" width="340" height="640" rx="24" fill="#ffffff"/>
+<circle cx="400" cy="330" r="120" fill="#00754A"/>
+<rect x="820" y="600" width="260" height="72" rx="36" fill="#00754A"/>
+<rect x="820" y="140" width="180" height="24" rx="12" fill="#edebe9"/>
+<rect x="820" y="200" width="260" height="24" rx="12" fill="#edebe9"/>
+<rect x="820" y="260" width="220" height="24" rx="12" fill="#edebe9"/>
+</svg>
+</template>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: Manrope, Inter, "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing: -0.01em; color: rgba(0,0,0,0.87); background: #f2f0eb; -webkit-font-smoothing: antialiased; }
+  a { color: #00754A; text-decoration: none; }
+  a:hover { color: #006241; text-decoration: underline; }
+  input, button { font-family: inherit; letter-spacing: -0.01em; }
+  button { cursor: pointer; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 3px; }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(10px) scale(0.97); } to { opacity: 1; transform: none; } }
+  @keyframes badgePop { from { transform: scale(0.6); } to { transform: scale(1); } }
+</style>
+</helmet>
+<div data-screen-label="POS Billing" style="height: 100vh; min-height: 700px; display: flex; flex-direction: column; background: #f2f0eb; overflow: hidden">
+
+  <header style="flex-shrink: 0; display: flex; align-items: center; gap: 24px; padding: 12px 24px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 2px 2px rgba(0,0,0,0.06), 0 0 2px rgba(0,0,0,0.07)">
+    <div style="display: flex; align-items: center; gap: 10px; min-width: 200px">
+      <span style="width: 36px; height: 36px; border-radius: 50%; background: #00754A; display: flex; align-items: center; justify-content: center; color: #fff; flex-shrink: 0">
+        <img src="https://api.iconify.design/lucide/coffee.svg?color=%23ffffff&width=48&height=48" alt="" style="width: 19px; height: 19px; flex-shrink: 0; display: block">
+      </span>
+      <span style="display: flex; flex-direction: column; line-height: 1.15">
+        <span style="font-size: 17px; font-weight: 700; color: #006241">{{ restaurantName }}</span>
+        <span style="font-size: 11px; font-weight: 500; color: rgba(0,0,0,0.58)">Counter 1 &middot; New Order</span>
+      </span>
+    </div>
+
+    <div style="position: relative; flex: 1; max-width: 380px">
+      <img src="https://api.iconify.design/lucide/search.svg?color=%238f8f8f&width=48&height=48" alt="" style="width: 16px; height: 16px; flex-shrink: 0; display: block">
+      <input type="text" placeholder="Search orders, customers, items" style="width: 100%; padding: 10px 14px 10px 38px; border-radius: 50px; border: 1px solid #d6dbde; background: #f9f9f9; font-size: 14px; color: rgba(0,0,0,0.87); outline: none" style-focus="border-color: #00754A; background: #ffffff">
+    </div>
+
+    <div style="margin-left: auto; display: flex; align-items: center; gap: 14px">
+      <button style="width: 38px; height: 38px; border-radius: 50%; border: 1px solid #d6dbde; background: #ffffff; display: flex; align-items: center; justify-content: center; color: rgba(0,0,0,0.58); transition: all 0.2s ease" style-hover="border-color: #00754A; color: #00754A" style-active="transform: scale(0.95)">
+        <img src="https://api.iconify.design/lucide/bell.svg?color=%236b6b6b&width=48&height=48" alt="" style="width: 17px; height: 17px; flex-shrink: 0; display: block">
+      </button>
+      <div style="display: flex; align-items: center; gap: 10px">
+        <span style="display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2">
+          <span style="font-size: 13px; font-weight: 600; color: rgba(0,0,0,0.87)">{{ staffName }}</span>
+          <span style="font-size: 11px; font-weight: 500; color: rgba(0,0,0,0.58)">Cashier &middot; On shift</span>
+        </span>
+        <span style="position: relative; flex-shrink: 0">
+          <span style="width: 38px; height: 38px; border-radius: 50%; background: #d4e9e2; color: #1E3932; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center">{{ staffInitials }}</span>
+          <span style="position: absolute; bottom: 0; right: 0; width: 10px; height: 10px; border-radius: 50%; background: #00754A; border: 2px solid #ffffff"></span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main style="flex: 1; min-height: 0; display: flex; gap: 24px; padding: 24px">
+
+    <section style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px">
+        <div>
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #006241; line-height: 1.2">Menu</h1>
+          <p style="margin: 6px 0 0; font-size: 14px; font-weight: 500; color: rgba(0,0,0,0.58)">Tap an item to add it to the order</p>
+        </div>
+        <span style="font-size: 13px; font-weight: 600; color: rgba(0,0,0,0.58)">{{ resultCount }}</span>
+      </div>
+
+      <div style="flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; background: #ffffff; border-radius: 12px; padding: 16px; box-shadow: 0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24)">
+        <div style="position: relative">
+          <img src="https://api.iconify.design/lucide/search.svg?color=%238f8f8f&width=48&height=48" alt="" style="width: 16px; height: 16px; flex-shrink: 0; display: block">
+          <input type="text" placeholder="Search in products" value="{{ query }}" onChange="{{ onQuery }}" style="width: 100%; padding: 11px 14px 11px 38px; border-radius: 50px; border: 1px solid #d6dbde; background: #f9f9f9; font-size: 14px; outline: none" style-focus="border-color: #00754A; background: #ffffff">
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 8px">
+          <sc-for list="{{ categories }}" as="cat" hint-placeholder-count="6">
+            <button onClick="{{ cat.onSelect }}" style="padding: 8px 18px; border-radius: 50px; font-size: 14px; font-weight: 600; transition: all 0.2s ease; background: {{ cat.bg }}; color: {{ cat.fg }}; border: 1px solid {{ cat.bd }}" style-active="transform: scale(0.95)">{{ cat.name }}</button>
+          </sc-for>
+        </div>
+
+        <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 2px 4px 4px 2px; display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 16px; align-content: start">
+          <sc-for list="{{ products }}" as="p" hint-placeholder-count="8">
+            <button onClick="{{ p.onAdd }}" style="position: relative; text-align: left; padding: 12px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.07); background: #ffffff; box-shadow: 0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24); display: flex; flex-direction: column; gap: 10px; transition: all 0.2s ease" style-hover="border-color: #00754A" style-active="transform: scale(0.95)">
+              <img src="{{ p.img }}" alt="{{ p.name }}" style="width: 100%; height: 104px; border-radius: 10px; object-fit: cover; display: block; background: #edebe9">
+              <span style="display: flex; flex-direction: column; gap: 4px">
+                <span style="font-size: 14px; font-weight: 600; color: rgba(0,0,0,0.87); line-height: 1.3">{{ p.name }}</span>
+                <span style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px">
+                  <span style="font-size: 15px; font-weight: 700; color: #00754A">{{ p.priceLabel }}</span>
+                  <span style="font-size: 11px; font-weight: 500; color: rgba(0,0,0,0.45)">{{ p.cat }}</span>
+                </span>
+              </span>
+              <sc-if value="{{ p.inCart }}" hint-placeholder-val="{{ false }}">
+                <span style="position: absolute; top: 8px; right: 8px; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 50px; background: #00754A; color: #ffffff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 6px rgba(0,0,0,0.24); animation: badgePop 0.18s ease-out">{{ p.qty }}</span>
+              </sc-if>
+            </button>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+          <p style="margin: 0; padding: 8px 0 4px; text-align: center; font-size: 14px; font-weight: 500; color: rgba(0,0,0,0.58)">No items match that search.</p>
+        </sc-if>
+      </div>
+    </section>
+
+    <aside style="width: 400px; flex-shrink: 0; display: flex; flex-direction: column; background: #ffffff; border-radius: 12px; box-shadow: 0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24); overflow: hidden">
+
+      <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid #edebe9">
+        <div style="border: 1px solid {{ nameBorder }}; border-radius: 12px; padding: 8px 14px 10px; background: #ffffff">
+          <label for="cust" style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: {{ nameLabelColor }}">Customer name {{ nameHint }}</label>
+          <input id="cust" type="text" placeholder="e.g. Aarav Mehta" value="{{ customerName }}" onChange="{{ onCustomerName }}" style="width: 100%; margin-top: 3px; border: 0; padding: 0; font-size: 15px; font-weight: 600; color: rgba(0,0,0,0.87); background: transparent; outline: none">
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between">
+          <span style="display: flex; align-items: center; gap: 8px">
+            <img src="https://api.iconify.design/lucide/receipt.svg?color=%2300754A&width=48&height=48" alt="" style="width: 17px; height: 17px; flex-shrink: 0; display: block">
+            <span style="font-size: 16px; font-weight: 700; color: rgba(0,0,0,0.87)">Order #{{ orderNumber }}</span>
+          </span>
+          <span style="font-size: 13px; font-weight: 600; color: rgba(0,0,0,0.58)">{{ itemCountLabel }}</span>
+        </div>
+      </div>
+
+      <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+        <sc-for list="{{ lines }}" as="l" hint-placeholder-count="3">
+          <div style="border: 1px solid rgba(0,0,0,0.07); border-radius: 12px; padding: 12px; background: #f9f9f9; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 10px">
+              <span style="display: flex; flex-direction: column; gap: 3px">
+                <span style="font-size: 14px; font-weight: 600; color: rgba(0,0,0,0.87)">{{ l.name }}</span>
+                <span style="font-size: 13px; font-weight: 500; color: rgba(0,0,0,0.58)">{{ l.mathLabel }}</span>
+              </span>
+              <span style="display: flex; align-items: center; gap: 8px; flex-shrink: 0">
+                <span style="font-size: 15px; font-weight: 700; color: #00754A">{{ l.totalLabel }}</span>
+                <button onClick="{{ l.onRemove }}" title="Remove item" style="width: 28px; height: 28px; border-radius: 50%; border: 1px solid #d6dbde; background: #ffffff; color: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; transition: all 0.2s ease" style-hover="border-color: #c82014; color: #c82014" style-active="transform: scale(0.95)">
+                  <img src="https://api.iconify.design/lucide/trash-2.svg?color=%238f8f8f&width=48&height=48" alt="" style="width: 14px; height: 14px; flex-shrink: 0; display: block">
+                </button>
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
+              <span style="display: flex; align-items: center; gap: 10px">
+                <button onClick="{{ l.onDec }}" style="width: 30px; height: 30px; border-radius: 50%; border: 1px solid #d6dbde; background: #ffffff; color: rgba(0,0,0,0.87); font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease" style-hover="border-color: #00754A; color: #00754A" style-active="transform: scale(0.95)">&minus;</button>
+                <span style="min-width: 18px; text-align: center; font-size: 15px; font-weight: 700">{{ l.qty }}</span>
+                <button onClick="{{ l.onInc }}" style="width: 30px; height: 30px; border-radius: 50%; border: 1px solid #00754A; background: #00754A; color: #ffffff; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease" style-active="transform: scale(0.95)">+</button>
+              </span>
+              <button onClick="{{ l.onToggleNote }}" style="display: flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 50px; border: 1px solid #d6dbde; background: #ffffff; font-size: 12px; font-weight: 600; color: rgba(0,0,0,0.58); transition: all 0.2s ease" style-hover="border-color: #00754A; color: #00754A" style-active="transform: scale(0.95)">
+                <img src="https://api.iconify.design/lucide/pencil-line.svg?color=%236b6b6b&width=48&height=48" alt="" style="width: 13px; height: 13px; flex-shrink: 0; display: block">{{ l.noteLabel }}
+              </button>
+            </div>
+            <sc-if value="{{ l.noteOpen }}" hint-placeholder-val="{{ false }}">
+              <input type="text" placeholder="Kitchen note — e.g. no onions" value="{{ l.note }}" onChange="{{ l.onNote }}" style="width: 100%; padding: 9px 14px; border-radius: 50px; border: 1px solid #d6dbde; background: #ffffff; font-size: 13px; outline: none" style-focus="border-color: #00754A">
+            </sc-if>
+          </div>
+        </sc-for>
+
+        <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px 24px; text-align: center">
+            <span style="width: 72px; height: 72px; border-radius: 50%; background: #f2f0eb; display: flex; align-items: center; justify-content: center; color: #00754A">
+              <img src="https://api.iconify.design/lucide/shopping-bag.svg?color=%2300754A&width=48&height=48" alt="" style="width: 30px; height: 30px; flex-shrink: 0; display: block">
+            </span>
+            <span style="font-size: 16px; font-weight: 700; color: rgba(0,0,0,0.87)">No items yet</span>
+            <span style="font-size: 13px; font-weight: 500; color: rgba(0,0,0,0.58); line-height: 1.5; max-width: 220px">Tap items from the menu and they will show up here, ready to bill.</span>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="flex-shrink: 0; border-top: 1px solid #edebe9; background: #ffffff; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+
+        <div style="display: flex; align-items: center; gap: 10px">
+          <div style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: 1px solid #d6dbde; border-radius: 50px; padding: 8px 14px">
+            <img src="https://api.iconify.design/lucide/badge-percent.svg?color=%238f8f8f&width=48&height=48" alt="" style="width: 16px; height: 16px; flex-shrink: 0; display: block">
+            <span style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: rgba(0,0,0,0.58); white-space: nowrap">Discount</span>
+            <input type="text" value="{{ discountValue }}" onChange="{{ onDiscount }}" style="flex: 1; min-width: 24px; border: 0; padding: 0; text-align: right; font-size: 15px; font-weight: 700; color: rgba(0,0,0,0.87); background: transparent; outline: none">
+            <span style="font-size: 14px; font-weight: 700; color: rgba(0,0,0,0.58); flex-shrink: 0">{{ discountUnit }}</span>
+          </div>
+          <div style="display: flex; gap: 4px; padding: 3px; border-radius: 50px; background: #f2f0eb; flex-shrink: 0">
+            <button onClick="{{ onFlat }}" style="padding: 6px 13px; border-radius: 50px; border: 0; font-size: 13px; font-weight: 700; transition: all 0.2s ease; background: {{ flatBg }}; color: {{ flatFg }}" style-active="transform: scale(0.95)">$</button>
+            <button onClick="{{ onPct }}" style="padding: 6px 13px; border-radius: 50px; border: 0; font-size: 13px; font-weight: 700; transition: all 0.2s ease; background: {{ pctBg }}; color: {{ pctFg }}" style-active="transform: scale(0.95)">%</button>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 9px">
+          <div style="display: flex; align-items: center; justify-content: space-between; font-size: 14px">
+            <span style="font-weight: 500; color: rgba(0,0,0,0.58)">Subtotal</span>
+            <span style="font-weight: 600; color: rgba(0,0,0,0.87)">{{ subtotalLabel }}</span>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; font-size: 14px">
+            <span style="font-weight: 500; color: rgba(0,0,0,0.58)">Discount</span>
+            <span style="font-weight: 600; color: rgba(0,0,0,0.87)">{{ discountLabel }}</span>
+          </div>
+          <sc-if value="{{ showTaxRow }}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: rgba(0,0,0,0.32)">
+              <span style="display: flex; align-items: center; gap: 6px; font-weight: 500">Tax
+                <span style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 50px; background: #f2f0eb; color: rgba(0,0,0,0.32)">Later</span>
+              </span>
+              <span style="font-weight: 600">&mdash;</span>
+            </div>
+          </sc-if>
+          <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px solid #edebe9">
+            <span style="font-size: 15px; font-weight: 700; color: rgba(0,0,0,0.87)">Total</span>
+            <span style="font-size: 24px; font-weight: 800; color: #00754A; line-height: 1.1">{{ totalLabel }}</span>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <sc-if value="{{ canGenerate }}" hint-placeholder-val="{{ true }}">
+            <button onClick="{{ onGenerate }}" style="width: 100%; padding: 13px 24px; border-radius: 50px; border: 1px solid #00754A; background: #00754A; color: #ffffff; font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s ease" style-hover="background: #006241; border-color: #006241" style-active="transform: scale(0.95)">
+              <img src="https://api.iconify.design/lucide/file-check-2.svg?color=%23ffffff&width=48&height=48" alt="" style="width: 17px; height: 17px; flex-shrink: 0; display: block">Generate Bill
+            </button>
+          </sc-if>
+          <sc-if value="{{ cannotGenerate }}" hint-placeholder-val="{{ false }}">
+            <button disabled="{{ true }}" title="{{ blockedReason }}" style="width: 100%; padding: 13px 24px; border-radius: 50px; border: 1px solid #edebe9; background: #edebe9; color: rgba(0,0,0,0.32); font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: not-allowed">
+              <img src="https://api.iconify.design/lucide/lock.svg?color=%23a8a8a8&width=48&height=48" alt="" style="width: 16px; height: 16px; flex-shrink: 0; display: block">{{ blockedReason }}
+            </button>
+          </sc-if>
+
+          <div style="display: flex; gap: 8px">
+            <button onClick="{{ onPrintKot }}" style="flex: 1; padding: 11px 14px; border-radius: 50px; border: 1px solid #00754A; background: #ffffff; color: #00754A; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; transition: all 0.2s ease" style-hover="background: #d4e9e2" style-active="transform: scale(0.95)">
+              <img src="https://api.iconify.design/lucide/printer.svg?color=%2300754A&width=48&height=48" alt="" style="width: 15px; height: 15px; flex-shrink: 0; display: block">Print KOT
+            </button>
+            <button onClick="{{ onPrintBill }}" style="flex: 1; padding: 11px 14px; border-radius: 50px; border: 1px solid #00754A; background: #ffffff; color: #00754A; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; transition: all 0.2s ease" style-hover="background: #d4e9e2" style-active="transform: scale(0.95)">
+              <img src="https://api.iconify.design/lucide/receipt-text.svg?color=%2300754A&width=48&height=48" alt="" style="width: 15px; height: 15px; flex-shrink: 0; display: block">Print Bill
+            </button>
+          </div>
+
+          <button onClick="{{ onToggleSend }}" style="width: 100%; padding: 11px 18px; border-radius: 50px; border: 1px solid #d6dbde; background: #ffffff; color: rgba(0,0,0,0.87); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; transition: all 0.2s ease" style-hover="border-color: #00754A; color: #00754A" style-active="transform: scale(0.95)">
+            <img src="https://api.iconify.design/lucide/send.svg?color=%23212121&width=48&height=48" alt="" style="width: 15px; height: 15px; flex-shrink: 0; display: block">Send Invoice
+            <img src="{{ sendChevronUrl }}" alt="" style="width: 15px; height: 15px; flex-shrink: 0">
+          </button>
+          <sc-if value="{{ sendOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; gap: 8px">
+              <button onClick="{{ onSendWhatsapp }}" style="flex: 1; padding: 10px 14px; border-radius: 50px; border: 1px solid #d6dbde; background: #f9f9f9; color: rgba(0,0,0,0.87); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; transition: all 0.2s ease" style-hover="border-color: #00754A; color: #00754A" style-active="transform: scale(0.95)">
+                <img src="https://api.iconify.design/lucide/message-circle.svg?color=%23212121&width=48&height=48" alt="" style="width: 15px; height: 15px; flex-shrink: 0; display: block">WhatsApp
+              </button>
+              <button onClick="{{ onSendSms }}" style="flex: 1; padding: 10px 14px; border-radius: 50px; border: 1px solid #d6dbde; background: #f9f9f9; color: rgba(0,0,0,0.87); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; transition: all 0.2s ease" style-hover="border-color: #00754A; color: #00754A" style-active="transform: scale(0.95)">
+                <img src="https://api.iconify.design/lucide/message-square.svg?color=%23212121&width=48&height=48" alt="" style="width: 15px; height: 15px; flex-shrink: 0; display: block">SMS
+              </button>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+    <div style="position: fixed; bottom: 24px; right: 24px; display: flex; align-items: center; gap: 10px; padding: 13px 22px; border-radius: 50px; background: #1E3932; color: #ffffff; font-size: 14px; font-weight: 600; box-shadow: 0 0 6px rgba(0,0,0,0.24), 0 8px 12px rgba(0,0,0,0.14); animation: toastIn 0.22s ease-out">
+      <img src="https://api.iconify.design/lucide/check-circle-2.svg?color=%23d4e9e2&width=48&height=48" alt="" style="width: 18px; height: 18px; flex-shrink: 0; display: block">{{ toast }}
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;restaurantName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Verdant Café&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;staffName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Nahid Zaman&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;orderNumber&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:20,&quot;min&quot;:1,&quot;max&quot;:999,&quot;tsType&quot;:&quot;number&quot;},&quot;showTaxRow&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Behavior&quot;},&quot;requireCustomerName&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Behavior&quot;}}">
+const R = (id, url) => (typeof window !== 'undefined' && window.__resources && window.__resources[id]) || url;
+const CHEV_DOWN = 'https://api.iconify.design/lucide/chevron-down.svg?color=%238f8f8f&width=48&height=48';
+const CHEV_UP = 'https://api.iconify.design/lucide/chevron-up.svg?color=%238f8f8f&width=48&height=48';
+const MENU = [
+  { id: 'p1', name: 'Cold Brew', price: 4.25, cat: 'Beverages', img: R('p1', 'https://images.unsplash.com/photo-1517701550927-30cf4ba1dba5?w=280&h=280&fit=crop') },
+  { id: 'p2', name: 'Vanilla Latte', price: 4.75, cat: 'Beverages', img: R('p2', 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=280&h=280&fit=crop') },
+  { id: 'p3', name: 'Iced Matcha', price: 5.25, cat: 'Beverages', img: R('p3', 'https://images.unsplash.com/photo-1515823064-d6e0c04616a7?w=280&h=280&fit=crop') },
+  { id: 'p4', name: 'Shrimp Basil Salad', price: 10.0, cat: 'Salads', img: R('p4', 'https://images.unsplash.com/photo-1626200419199-391ae4be7a41?w=280&h=280&fit=crop') },
+  { id: 'p5', name: 'Garden Greens', price: 8.5, cat: 'Salads', img: R('p5', 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=280&h=280&fit=crop') },
+  { id: 'p6', name: 'Roast Tomato Soup', price: 6.0, cat: 'Soup', img: R('p6', 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=280&h=280&fit=crop') },
+  { id: 'p7', name: 'Sweet Corn Soup', price: 5.75, cat: 'Soup', img: R('p7', 'https://images.unsplash.com/photo-1547592180-85f173990554?w=280&h=280&fit=crop') },
+  { id: 'p8', name: 'Margherita Pizza', price: 12.5, cat: 'Pizza', img: R('p8', 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=280&h=280&fit=crop') },
+  { id: 'p9', name: 'Vegetable Pizza', price: 13.0, cat: 'Pizza', img: R('p9', 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=280&h=280&fit=crop') },
+  { id: 'p10', name: 'Chicken Biryani', price: 11.75, cat: 'Rice', img: R('p10', 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=280&h=280&fit=crop') },
+  { id: 'p11', name: 'Egg Fried Rice', price: 9.0, cat: 'Rice', img: R('p11', 'https://images.unsplash.com/photo-1603133872878-684f208fb84b?w=280&h=280&fit=crop') },
+  { id: 'p12', name: 'Steamed Jasmine Rice', price: 3.5, cat: 'Rice', img: R('p12', 'https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=280&h=280&fit=crop') },
+  { id: 'p13', name: 'Onion Rings', price: 5.0, cat: 'Salads', img: R('p13', 'https://images.unsplash.com/photo-1639024471283-03518883512d?w=280&h=280&fit=crop') },
+  { id: 'p14', name: 'Chicken Burger', price: 10.5, cat: 'Pizza', img: R('p14', 'https://images.unsplash.com/photo-1550547660-d9450f859349?w=280&h=280&fit=crop') },
+  { id: 'p15', name: 'Fish & Chips', price: 13.5, cat: 'Pizza', img: R('p15', 'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=280&h=280&fit=crop') },
+  { id: 'p16', name: 'Blueberry Muffin', price: 3.25, cat: 'Beverages', img: R('p16', 'https://images.unsplash.com/photo-1607958996333-41aef7caefaa?w=280&h=280&fit=crop') }
+];
+const CATS = ['Show All', 'Beverages', 'Rice', 'Salads', 'Soup', 'Pizza'];
+
+class Component extends DCLogic {
+  state = {
+    cat: 'Show All',
+    query: '',
+    customer: '',
+    cart: [
+      { id: 'p2', qty: 2, note: '', noteOpen: false },
+      { id: 'p10', qty: 1, note: 'extra raita', noteOpen: false },
+      { id: 'p6', qty: 1, note: '', noteOpen: false }
+    ],
+    discountMode: 'flat',
+    discountValue: '0',
+    sendOpen: false,
+    toast: ''
+  };
+
+  money(n) { return '$' + n.toFixed(2); }
+
+  flash(msg) {
+    clearTimeout(this._t);
+    this.setState({ toast: msg });
+    this._t = setTimeout(() => this.setState({ toast: '' }), 2600);
+  }
+
+  componentWillUnmount() { clearTimeout(this._t); }
+
+  add = (id) => {
+    const cart = this.state.cart.slice();
+    const i = cart.findIndex(l => l.id === id);
+    if (i > -1) cart[i] = Object.assign({}, cart[i], { qty: cart[i].qty + 1 });
+    else cart.push({ id, qty: 1, note: '', noteOpen: false });
+    this.setState({ cart });
+  };
+
+  bump = (id, d) => {
+    const cart = this.state.cart
+      .map(l => l.id === id ? Object.assign({}, l, { qty: l.qty + d }) : l)
+      .filter(l => l.qty > 0);
+    this.setState({ cart });
+  };
+
+  patch = (id, obj) => {
+    this.setState({ cart: this.state.cart.map(l => l.id === id ? Object.assign({}, l, obj) : l) });
+  };
+
+  renderVals() {
+    const s = this.state;
+    const q = s.query.trim().toLowerCase();
+    const qtyOf = (id) => { const l = s.cart.find(x => x.id === id); return l ? l.qty : 0; };
+
+    const products = MENU
+      .filter(p => (s.cat === 'Show All' || p.cat === s.cat) && (!q || p.name.toLowerCase().includes(q)))
+      .map(p => ({
+        name: p.name, cat: p.cat, img: p.img, priceLabel: this.money(p.price),
+        qty: qtyOf(p.id), inCart: qtyOf(p.id) > 0, onAdd: () => this.add(p.id)
+      }));
+
+    const categories = CATS.map(name => {
+      const on = name === s.cat;
+      return {
+        name,
+        bg: on ? '#00754A' : '#ffffff',
+        fg: on ? '#ffffff' : 'rgba(0,0,0,0.58)',
+        bd: on ? '#00754A' : '#d6dbde',
+        onSelect: () => this.setState({ cat: name })
+      };
+    });
+
+    const lines = s.cart.map(l => {
+      const p = MENU.find(m => m.id === l.id);
+      return {
+        name: p.name, qty: l.qty, note: l.note, noteOpen: l.noteOpen,
+        mathLabel: this.money(p.price) + ' × ' + l.qty,
+        totalLabel: this.money(p.price * l.qty),
+        noteLabel: l.note ? 'Note added' : 'Add note',
+        onInc: () => this.bump(l.id, 1),
+        onDec: () => this.bump(l.id, -1),
+        onRemove: () => this.setState({ cart: s.cart.filter(x => x.id !== l.id) }),
+        onToggleNote: () => this.patch(l.id, { noteOpen: !l.noteOpen }),
+        onNote: (e) => this.patch(l.id, { note: e.target.value })
+      };
+    });
+
+    const subtotal = s.cart.reduce((a, l) => a + MENU.find(m => m.id === l.id).price * l.qty, 0);
+    const raw = parseFloat(s.discountValue) || 0;
+    const discount = Math.min(s.discountMode === 'pct' ? subtotal * raw / 100 : raw, subtotal);
+    const count = s.cart.reduce((a, l) => a + l.qty, 0);
+    const requireName = this.props.requireCustomerName ?? true;
+    const hasName = s.customer.trim().length > 0;
+    const ok = count > 0 && (!requireName || hasName);
+    const blocked = count === 0 ? 'Add an item to bill' : 'Enter customer name';
+
+    return {
+      restaurantName: this.props.restaurantName ?? 'Verdant Café',
+      staffName: this.props.staffName ?? 'Nahid Zaman',
+      staffInitials: (this.props.staffName ?? 'Nahid Zaman').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+      orderNumber: this.props.orderNumber ?? 20,
+      showTaxRow: this.props.showTaxRow ?? true,
+      categories, products, lines,
+      query: s.query,
+      onQuery: (e) => this.setState({ query: e.target.value }),
+      resultCount: products.length + ' items',
+      noResults: products.length === 0,
+      customerName: s.customer,
+      onCustomerName: (e) => this.setState({ customer: e.target.value }),
+      nameBorder: requireName && !hasName ? '#cba258' : '#d6dbde',
+      nameLabelColor: requireName && !hasName ? '#8a6a24' : 'rgba(0,0,0,0.58)',
+      nameHint: requireName && !hasName ? '· required' : '',
+      itemCountLabel: count === 1 ? '1 item' : count + ' items',
+      isEmpty: s.cart.length === 0,
+      discountValue: s.discountValue,
+      discountUnit: s.discountMode === 'pct' ? '%' : '$',
+      onDiscount: (e) => this.setState({ discountValue: e.target.value }),
+      onFlat: () => this.setState({ discountMode: 'flat' }),
+      onPct: () => this.setState({ discountMode: 'pct' }),
+      flatBg: s.discountMode === 'flat' ? '#ffffff' : 'transparent',
+      flatFg: s.discountMode === 'flat' ? '#00754A' : 'rgba(0,0,0,0.45)',
+      pctBg: s.discountMode === 'pct' ? '#ffffff' : 'transparent',
+      pctFg: s.discountMode === 'pct' ? '#00754A' : 'rgba(0,0,0,0.45)',
+      subtotalLabel: this.money(subtotal),
+      discountLabel: (discount > 0 ? '− ' : '') + this.money(discount),
+      totalLabel: this.money(Math.max(subtotal - discount, 0)),
+      canGenerate: ok,
+      cannotGenerate: !ok,
+      blockedReason: blocked,
+      onGenerate: () => this.flash('Bill generated for ' + s.customer.trim()),
+      onPrintKot: () => this.flash('Kitchen ticket sent to printer'),
+      onPrintBill: () => this.flash('Bill sent to receipt printer'),
+      sendOpen: s.sendOpen,
+      sendChevronUrl: s.sendOpen ? R('chevUp', CHEV_UP) : R('chevDown', CHEV_DOWN),
+      onToggleSend: () => this.setState({ sendOpen: !s.sendOpen }),
+      onSendWhatsapp: () => { this.setState({ sendOpen: false }); this.flash('Invoice sent on WhatsApp'); },
+      onSendSms: () => { this.setState({ sendOpen: false }); this.flash('Invoice sent by SMS'); },
+      toast: s.toast
+    };
+  }
+}
+</script>
+</body>
+</html>

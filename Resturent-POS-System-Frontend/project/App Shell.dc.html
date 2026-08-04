@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: Manrope, Inter, "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing: -0.01em; color: rgba(0,0,0,0.87); background: #f2f0eb; -webkit-font-smoothing: antialiased; }
+  a { color: #00754A; text-decoration: none; }
+  a:hover { color: #006241; text-decoration: underline; }
+  input, button { font-family: inherit; letter-spacing: -0.01em; }
+  button { cursor: pointer; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 3px; }
+  @keyframes tipIn { from { opacity: 0; transform: translate(4px, -50%); } to { opacity: 1; transform: translate(0, -50%); } }
+</style>
+</helmet>
+<div data-screen-label="App Shell" style="height: 100vh; min-height: 640px; display: flex; background: #f2f0eb; overflow: hidden">
+
+  <aside style="position: relative; flex-shrink: 0; display: flex; flex-direction: column; background: #ffffff; box-shadow: 0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24); transition: width 220ms ease; width: {{ sidebarWidth }}">
+
+    <button onClick="{{ onToggle }}" title="{{ toggleTitle }}" style="position: absolute; top: 26px; right: -14px; z-index: 5; width: 28px; height: 28px; border-radius: 50%; border: 1px solid #d6dbde; background: #ffffff; color: #00754A; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 6px rgba(0,0,0,0.14); transition: all 0.2s ease" style-hover="border-color: #00754A; background: #d4e9e2" style-active="transform: scale(0.95)">
+      <iconify-icon icon="{{ toggleIcon }}" style="font-size: 15px"></iconify-icon>
+    </button>
+
+    <div style="padding: 20px 16px 14px; display: flex; align-items: center; gap: 10px; overflow: hidden">
+      <span style="width: 40px; height: 40px; border-radius: 50%; background: #00754A; display: flex; align-items: center; justify-content: center; color: #ffffff; flex-shrink: 0">
+        <iconify-icon icon="lucide:coffee" style="font-size: 21px"></iconify-icon>
+      </span>
+      <sc-if value="{{ expanded }}" hint-placeholder-val="{{ true }}">
+        <span style="display: flex; flex-direction: column; line-height: 1.2; white-space: nowrap">
+          <span style="font-size: 17px; font-weight: 700; color: #006241">{{ restaurantName }}</span>
+          <span style="font-size: 11px; font-weight: 600; color: rgba(0,0,0,0.45)">Point of Sale</span>
+        </span>
+      </sc-if>
+    </div>
+
+    <div style="padding: 0 16px 16px; display: flex; align-items: center; gap: 10px; overflow: hidden">
+      <img src="https://i.pravatar.cc/96?img=45" alt="{{ staffName }}" style="width: 36px; height: 36px; border-radius: 50%; object-fit: cover; display: block; border: 2px solid #d4e9e2; flex-shrink: 0">
+      <sc-if value="{{ expanded }}" hint-placeholder-val="{{ true }}">
+        <span style="display: flex; flex-direction: column; gap: 3px; align-items: flex-start; white-space: nowrap">
+          <span style="font-size: 13px; font-weight: 700; color: rgba(0,0,0,0.87)">{{ staffName }}</span>
+          <span style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #00754A; background: #d4e9e2; padding: 2px 8px; border-radius: 50px">{{ staffRole }}</span>
+        </span>
+      </sc-if>
+    </div>
+
+    <nav style="flex: 1; min-height: 0; overflow: visible; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 4px">
+
+      <sc-if value="{{ expanded }}" hint-placeholder-val="{{ true }}">
+        <p style="margin: 8px 12px 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em; color: rgba(0,0,0,0.38); white-space: nowrap">Operations</p>
+      </sc-if>
+      <sc-if value="{{ collapsed }}" hint-placeholder-val="{{ false }}">
+        <span style="height: 1px; background: #edebe9; margin: 10px 8px 6px"></span>
+      </sc-if>
+      <sc-for list="{{ opsItems }}" as="n" hint-placeholder-count="2">
+        <div style="position: relative">
+          <button onClick="{{ n.onSelect }}" onMouseEnter="{{ n.onEnter }}" onMouseLeave="{{ n.onLeave }}" style="width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: 12px; font-size: 14px; font-weight: {{ n.weight }}; transition: all 0.2s ease; background: {{ n.bg }}; color: {{ n.fg }}; justify-content: {{ n.justify }}; overflow: hidden" style-hover="background: {{ n.hoverBg }}" style-active="transform: scale(0.95)">
+            <iconify-icon icon="{{ n.icon }}" style="font-size: 19px; flex-shrink: 0; color: {{ n.iconColor }}"></iconify-icon>
+            <sc-if value="{{ expanded }}" hint-placeholder-val="{{ true }}">
+              <span style="white-space: nowrap">{{ n.label }}</span>
+            </sc-if>
+          </button>
+          <sc-if value="{{ n.tipOpen }}" hint-placeholder-val="{{ false }}">
+            <span style="position: absolute; left: calc(100% + 14px); top: 50%; z-index: 20; padding: 7px 13px; border-radius: 50px; background: #1E3932; color: #ffffff; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: 0 0 6px rgba(0,0,0,0.24); animation: tipIn 0.15s ease-out; pointer-events: none">{{ n.label }}</span>
+          </sc-if>
+        </div>
+      </sc-for>
+
+      <sc-if value="{{ expanded }}" hint-placeholder-val="{{ true }}">
+        <p style="margin: 16px 12px 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em; color: rgba(0,0,0,0.38); white-space: nowrap">Management</p>
+      </sc-if>
+      <sc-if value="{{ collapsed }}" hint-placeholder-val="{{ false }}">
+        <span style="height: 1px; background: #edebe9; margin: 10px 8px 6px"></span>
+      </sc-if>
+      <sc-for list="{{ mgmtItems }}" as="n" hint-placeholder-count="3">
+        <div style="position: relative">
+          <button onClick="{{ n.onSelect }}" onMouseEnter="{{ n.onEnter }}" onMouseLeave="{{ n.onLeave }}" style="width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: 12px; font-size: 14px; font-weight: {{ n.weight }}; transition: all 0.2s ease; background: {{ n.bg }}; color: {{ n.fg }}; justify-content: {{ n.justify }}; overflow: hidden" style-hover="background: {{ n.hoverBg }}" style-active="transform: scale(0.95)">
+            <iconify-icon icon="{{ n.icon }}" style="font-size: 19px; flex-shrink: 0; color: {{ n.iconColor }}"></iconify-icon>
+            <sc-if value="{{ expanded }}" hint-placeholder-val="{{ true }}">
+              <span style="white-space: nowrap">{{ n.label }}</span>
+            </sc-if>
+          </button>
+          <sc-if value="{{ n.tipOpen }}" hint-placeholder-val="{{ false }}">
+            <span style="position: absolute; left: calc(100% + 14px); top: 50%; z-index: 20; padding: 7px 13px; border-radius: 50px; background: #1E3932; color: #ffffff; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: 0 0 6px rgba(0,0,0,0.24); animation: tipIn 0.15s ease-out; pointer-events: none">{{ n.label }}</span>
+          </sc-if>
+        </div>
+      </sc-for>
+    </nav>
+
+    <div style="flex-shrink: 0; border-top: 1px solid #edebe9; padding: 12px">
+      <button onClick="{{ onLogout }}" title="Log out" style="width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: 12px; background: transparent; color: rgba(0,0,0,0.58); font-size: 14px; font-weight: 600; transition: all 0.2s ease; justify-content: {{ logoutJustify }}; overflow: hidden" style-hover="background: #f9f9f9; color: #c82014" style-active="transform: scale(0.95)">
+        <iconify-icon icon="lucide:log-out" style="font-size: 19px; flex-shrink: 0"></iconify-icon>
+        <sc-if value="{{ expanded }}" hint-placeholder-val="{{ true }}">
+          <span style="white-space: nowrap">Log out</span>
+        </sc-if>
+      </button>
+    </div>
+  </aside>
+
+  <div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+
+    <header style="flex-shrink: 0; display: flex; align-items: center; gap: 20px; padding: 12px 24px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 2px 2px rgba(0,0,0,0.06), 0 0 2px rgba(0,0,0,0.07)">
+      <div style="position: relative; flex: 1; max-width: 400px">
+        <iconify-icon icon="lucide:search" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 16px; color: rgba(0,0,0,0.45)"></iconify-icon>
+        <input type="text" placeholder="Search orders, tables, menu items" style="width: 100%; padding: 10px 14px 10px 38px; border-radius: 50px; border: 1px solid #d6dbde; background: #f9f9f9; font-size: 14px; outline: none" style-focus="border-color: #00754A; background: #ffffff">
+      </div>
+
+      <div style="margin-left: auto; display: flex; align-items: center; gap: 10px">
+        <button onClick="{{ onSwitchRole }}" style="display: flex; align-items: center; gap: 8px; padding: 8px 16px 8px 8px; border-radius: 50px; border: 1px solid #d6dbde; background: #ffffff; font-size: 13px; font-weight: 700; color: rgba(0,0,0,0.87); transition: all 0.2s ease" style-hover="border-color: #00754A; color: #00754A" style-active="transform: scale(0.95)">
+          <img src="https://i.pravatar.cc/96?img=45" alt="{{ staffName }}" style="width: 26px; height: 26px; border-radius: 50%; object-fit: cover; display: block">
+          {{ staffName }} &middot; {{ staffRole }}
+          <iconify-icon icon="lucide:repeat-2" style="font-size: 15px; color: rgba(0,0,0,0.45)"></iconify-icon>
+        </button>
+        <button onClick="{{ onLogout }}" title="Log out" style="width: 38px; height: 38px; border-radius: 50%; border: 1px solid #d6dbde; background: #ffffff; color: rgba(0,0,0,0.58); display: flex; align-items: center; justify-content: center; transition: all 0.2s ease" style-hover="border-color: #c82014; color: #c82014" style-active="transform: scale(0.95)">
+          <iconify-icon icon="lucide:log-out" style="font-size: 17px"></iconify-icon>
+        </button>
+      </div>
+    </header>
+
+    <main style="flex: 1; min-height: 0; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px">
+        <div>
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #006241; line-height: 1.2">{{ activeLabel }}</h1>
+          <p style="margin: 6px 0 0; font-size: 14px; font-weight: 500; color: rgba(0,0,0,0.58)">{{ activeBlurb }}</p>
+        </div>
+        <span style="font-size: 12px; font-weight: 600; color: rgba(0,0,0,0.45)">Sidebar: {{ stateLabel }}</span>
+      </div>
+
+      <div style="flex: 1; min-height: 280px; border-radius: 12px; background: #ffffff; box-shadow: 0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24); display: flex; align-items: center; justify-content: center; padding: 32px">
+        <div style="width: 100%; height: 100%; min-height: 220px; border-radius: 12px; border: 1px dashed #d6dbde; background: repeating-linear-gradient(45deg, #f9f9f9 0 10px, #ffffff 10px 20px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 24px">
+          <iconify-icon icon="{{ activeIcon }}" style="font-size: 30px; color: #00754A"></iconify-icon>
+          <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 600; color: rgba(0,0,0,0.58)">{{ activeLabel }} screen mounts here</span>
+          <span style="font-size: 12px; font-weight: 500; color: rgba(0,0,0,0.45); max-width: 320px; line-height: 1.5">Content reflows with the sidebar &mdash; nothing floats over it at desktop widths.</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;restaurantName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Verdant Café&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;staffName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Priya Nair&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;staffRole&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Cashier&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;startCollapsed&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Behavior&quot;}}">
+const NAV = [
+  { id: 'dashboard', label: 'Dashboard', icon: 'lucide:layout-dashboard', group: 'ops', blurb: 'Sales, covers and shift performance at a glance.' },
+  { id: 'billing', label: 'POS Billing', icon: 'lucide:receipt', group: 'ops', blurb: 'Take an order, apply discounts and settle the bill.' },
+  { id: 'menu', label: 'Menu Management', icon: 'lucide:book-open', group: 'mgmt', blurb: 'Items, categories, pricing and availability.' },
+  { id: 'tables', label: 'Table Management', icon: 'lucide:grid-2x2', group: 'mgmt', blurb: 'Floor plan, seating status and table turnover.' },
+  { id: 'kitchen', label: 'Kitchen Management', icon: 'lucide:chef-hat', group: 'mgmt', blurb: 'Live kitchen tickets and prep queue.' }
+];
+const KEY = 'pos.shell.v1';
+
+class Component extends DCLogic {
+  state = { collapsed: false, active: 'billing', hover: '', loaded: false };
+
+  componentDidMount() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { saved = null; }
+    this.setState({
+      collapsed: saved && typeof saved.collapsed === 'boolean' ? saved.collapsed : (this.props.startCollapsed ?? false),
+      active: saved && NAV.some(n => n.id === saved.active) ? saved.active : this.state.active,
+      loaded: true
+    });
+  }
+
+  persist(next) {
+    try { localStorage.setItem(KEY, JSON.stringify({ collapsed: next.collapsed, active: next.active })); } catch (e) {}
+  }
+
+  set = (patch) => {
+    const next = Object.assign({ collapsed: this.state.collapsed, active: this.state.active }, patch);
+    this.setState(patch);
+    this.persist(next);
+  };
+
+  navItem(n, collapsed) {
+    const on = n.id === this.state.active;
+    return {
+      label: n.label, icon: n.icon,
+      bg: on ? '#d4e9e2' : 'transparent',
+      hoverBg: on ? '#d4e9e2' : '#f9f9f9',
+      fg: on ? '#1E3932' : 'rgba(0,0,0,0.58)',
+      iconColor: on ? '#00754A' : 'rgba(0,0,0,0.45)',
+      weight: on ? 700 : 500,
+      justify: collapsed ? 'center' : 'flex-start',
+      tipOpen: collapsed && this.state.hover === n.id,
+      onSelect: () => this.set({ active: n.id }),
+      onEnter: () => this.setState({ hover: n.id }),
+      onLeave: () => this.setState({ hover: '' })
+    };
+  }
+
+  renderVals() {
+    const c = this.state.collapsed;
+    const active = NAV.find(n => n.id === this.state.active) || NAV[0];
+    return {
+      restaurantName: this.props.restaurantName ?? 'Verdant Café',
+      staffName: this.props.staffName ?? 'Priya Nair',
+      staffRole: this.props.staffRole ?? 'Cashier',
+      expanded: !c,
+      collapsed: c,
+      sidebarWidth: c ? '72px' : '240px',
+      stateLabel: c ? 'collapsed · 72px' : 'expanded · 240px',
+      toggleIcon: c ? 'lucide:chevron-right' : 'lucide:chevron-left',
+      toggleTitle: c ? 'Expand sidebar' : 'Collapse sidebar',
+      onToggle: () => this.set({ collapsed: !c }),
+      opsItems: NAV.filter(n => n.group === 'ops').map(n => this.navItem(n, c)),
+      mgmtItems: NAV.filter(n => n.group === 'mgmt').map(n => this.navItem(n, c)),
+      logoutJustify: c ? 'center' : 'flex-start',
+      activeLabel: active.label,
+      activeBlurb: active.blurb,
+      activeIcon: active.icon,
+      onLogout: () => {},
+      onSwitchRole: () => {}
+    };
+  }
+}
+</script>
+</body>
+</html>

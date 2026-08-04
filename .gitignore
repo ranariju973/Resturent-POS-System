@@ -1,0 +1,20 @@
+# Root-level ignores. Each project also has its own .gitignore, which still
+# applies inside its own directory.
+
+.DS_Store
+*.log
+
+# Defence in depth: real env files must never be committed. The per-project
+# .gitignore files already cover these; this is a backstop for the whole tree.
+.env
+.env.local
+.env.*.local
+
+# Dependencies and build output, wherever they appear.
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Vite's dependency pre-bundling cache. Auto-generated, safe to delete.
+.vite/

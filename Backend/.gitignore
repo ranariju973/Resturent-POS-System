@@ -1,0 +1,14 @@
+node_modules/
+
+# Real environment files. .env.example is intentionally NOT ignored — it is the
+# committed template, and its secret fields are blank.
+.env
+.env.local
+.env.*.local
+
+logs/
+*.log
+npm-debug.log*
+.DS_Store
+coverage/
+dist/

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: Manrope, Inter, "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing: -0.01em; color: rgba(0,0,0,0.87); background: #f2f0eb; -webkit-font-smoothing: antialiased; }
+  a { color: #00754A; text-decoration: none; }
+  a:hover { color: #006241; text-decoration: underline; }
+  input, button { font-family: inherit; letter-spacing: -0.01em; }
+  button { cursor: pointer; }
+  @keyframes shake { 10%, 90% { transform: translateX(-2px); } 20%, 80% { transform: translateX(4px); } 30%, 50%, 70% { transform: translateX(-7px); } 40%, 60% { transform: translateX(7px); } }
+  @keyframes riseIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+</style>
+</helmet>
+<div data-screen-label="POS Login" style="min-height: 100vh; background: #f2f0eb; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 40px 24px">
+
+  <div style="width: 100%; max-width: 428px; background: #ffffff; border-radius: 12px; box-shadow: 0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24); padding: 28px 28px 24px; display: flex; flex-direction: column; gap: 20px">
+
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 10px">
+      <span style="width: 52px; height: 52px; border-radius: 50%; background: #00754A; display: flex; align-items: center; justify-content: center; color: #ffffff">
+        <iconify-icon icon="lucide:coffee" style="font-size: 26px"></iconify-icon>
+      </span>
+      <span style="font-size: 21px; font-weight: 700; color: #006241; line-height: 1.2">{{ restaurantName }}</span>
+      <span style="font-size: 13px; font-weight: 500; color: rgba(0,0,0,0.58)">{{ terminalLabel }}</span>
+    </div>
+
+    <sc-if value="{{ notSignedIn }}" hint-placeholder-val="{{ true }}">
+    <div style="display: flex; gap: 4px; padding: 4px; border-radius: 50px; background: #f2f0eb">
+      <button onClick="{{ onPinTab }}" style="flex: 1; padding: 10px 16px; border-radius: 50px; border: 0; font-size: 14px; font-weight: 700; transition: all 0.2s ease; display: flex; align-items: center; justify-content: center; gap: 7px; background: {{ pinTabBg }}; color: {{ pinTabFg }}; box-shadow: {{ pinTabShadow }}" style-active="transform: scale(0.95)">
+        <iconify-icon icon="lucide:grid-2x2" style="font-size: 15px"></iconify-icon>PIN
+      </button>
+      <button onClick="{{ onPwTab }}" style="flex: 1; padding: 10px 16px; border-radius: 50px; border: 0; font-size: 14px; font-weight: 700; transition: all 0.2s ease; display: flex; align-items: center; justify-content: center; gap: 7px; background: {{ pwTabBg }}; color: {{ pwTabFg }}; box-shadow: {{ pwTabShadow }}" style-active="transform: scale(0.95)">
+        <iconify-icon icon="lucide:key-round" style="font-size: 15px"></iconify-icon>Admin password
+      </button>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ signedIn }}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 40px 8px 44px; animation: riseIn 0.24s ease-out">
+        <span style="width: 68px; height: 68px; border-radius: 50%; background: #d4e9e2; display: flex; align-items: center; justify-content: center; color: #00754A">
+          <iconify-icon icon="lucide:check" style="font-size: 34px"></iconify-icon>
+        </span>
+        <span style="font-size: 18px; font-weight: 700; color: rgba(0,0,0,0.87)">{{ signedInName }} signed in</span>
+        <span style="font-size: 13px; font-weight: 500; color: rgba(0,0,0,0.58)">Opening the register&hellip;</span>
+        <button onClick="{{ onReset }}" style="margin-top: 6px; padding: 10px 22px; border-radius: 50px; border: 1px solid #00754A; background: #ffffff; color: #00754A; font-size: 13px; font-weight: 700; transition: all 0.2s ease" style-hover="background: #d4e9e2" style-active="transform: scale(0.95)">Switch user</button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ pinMode }}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; flex-direction: column; gap: 18px">
+
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; min-height: 92px; justify-content: center">
+          <sc-if value="{{ matched }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; align-items: center; gap: 12px; padding: 8px 18px 8px 8px; border-radius: 50px; background: #d4e9e2; animation: riseIn 0.22s ease-out">
+              <img src="{{ matchedAvatar }}" alt="{{ matchedName }}" style="width: 42px; height: 42px; border-radius: 50%; object-fit: cover; display: block; border: 2px solid #ffffff">
+              <span style="display: flex; flex-direction: column; line-height: 1.25">
+                <span style="font-size: 15px; font-weight: 700; color: #1E3932">Welcome, {{ matchedFirst }}</span>
+                <span style="font-size: 12px; font-weight: 600; color: #00754A; text-transform: uppercase; letter-spacing: 0.06em">{{ matchedRole }}</span>
+              </span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ notMatched }}" hint-placeholder-val="{{ true }}">
+            <span style="font-size: 14px; font-weight: 600; color: rgba(0,0,0,0.58)">Enter your {{ pinLength }}-digit PIN</span>
+          </sc-if>
+
+          <div style="display: flex; gap: 12px; animation: {{ shakeAnim }}">
+            <sc-for list="{{ dots }}" as="d" hint-placeholder-count="4">
+              <span style="width: 14px; height: 14px; border-radius: 50%; transition: all 0.15s ease; background: {{ d.bg }}; border: 2px solid {{ d.bd }}"></span>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ error }}" hint-placeholder-val="{{ false }}">
+            <span style="display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #c82014">
+              <iconify-icon icon="lucide:alert-circle" style="font-size: 15px"></iconify-icon>{{ error }}
+            </span>
+          </sc-if>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px">
+          <sc-for list="{{ keys }}" as="k" hint-placeholder-count="12">
+            <button onClick="{{ k.onPress }}" style="height: 62px; border-radius: 50px; border: 1px solid {{ k.bd }}; background: {{ k.bg }}; color: {{ k.fg }}; font-size: {{ k.size }}; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease" style-hover="border-color: #00754A" style-active="transform: scale(0.95)">{{ k.body }}</button>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ matched }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ onConfirm }}" style="width: 100%; padding: 15px 24px; border-radius: 50px; border: 1px solid #00754A; background: #00754A; color: #ffffff; font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s ease" style-hover="background: #006241; border-color: #006241" style-active="transform: scale(0.95)">
+            <iconify-icon icon="lucide:log-in" style="font-size: 18px"></iconify-icon>Confirm &amp; start shift
+          </button>
+        </sc-if>
+        <sc-if value="{{ notMatched }}" hint-placeholder-val="{{ true }}">
+          <button disabled="{{ true }}" style="width: 100%; padding: 15px 24px; border-radius: 50px; border: 1px solid #edebe9; background: #edebe9; color: rgba(0,0,0,0.32); font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: not-allowed">
+            <iconify-icon icon="lucide:lock" style="font-size: 16px"></iconify-icon>Confirm &amp; start shift
+          </button>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ pwMode }}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 14px; padding-top: 2px">
+        <div style="animation: {{ shakeAnim }}; display: flex; flex-direction: column; gap: 12px">
+          <div style="border: 1px solid #d6dbde; border-radius: 12px; padding: 9px 16px 11px">
+            <label for="email" style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(0,0,0,0.58)">Work email</label>
+            <input id="email" type="email" placeholder="admin@cafe.com" value="{{ email }}" onChange="{{ onEmail }}" style="width: 100%; margin-top: 4px; border: 0; padding: 0; font-size: 15px; font-weight: 600; background: transparent; outline: none">
+          </div>
+          <div style="border: 1px solid #d6dbde; border-radius: 12px; padding: 9px 16px 11px">
+            <label for="pw" style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(0,0,0,0.58)">Password</label>
+            <input id="pw" type="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" value="{{ password }}" onChange="{{ onPassword }}" style="width: 100%; margin-top: 4px; border: 0; padding: 0; font-size: 15px; font-weight: 600; background: transparent; outline: none">
+          </div>
+        </div>
+
+        <sc-if value="{{ error }}" hint-placeholder-val="{{ false }}">
+          <span style="display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #c82014">
+            <iconify-icon icon="lucide:alert-circle" style="font-size: 15px"></iconify-icon>{{ error }}
+          </span>
+        </sc-if>
+
+        <button onClick="{{ onSignIn }}" style="width: 100%; padding: 15px 24px; border-radius: 50px; border: 1px solid #00754A; background: #00754A; color: #ffffff; font-size: 15px; font-weight: 700; transition: all 0.2s ease" style-hover="background: #006241; border-color: #006241" style-active="transform: scale(0.95)">Sign In</button>
+        <a href="#forgot" style="align-self: center; font-size: 13px; font-weight: 600">Forgot password?</a>
+      </div>
+    </sc-if>
+  </div>
+
+  <sc-if value="{{ showHint }}" hint-placeholder-val="{{ true }}">
+    <p style="margin: 0; font-size: 12px; font-weight: 500; color: rgba(0,0,0,0.45); text-align: center">Demo &mdash; PIN <strong style="font-weight: 700; color: rgba(0,0,0,0.58)">1042</strong> (cashier) or <strong style="font-weight: 700; color: rgba(0,0,0,0.58)">2318</strong> (kitchen) &middot; any email + password for admin</p>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;restaurantName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Verdant Café&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;terminalLabel&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Terminal 1 · Front counter&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;pinLength&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:4,&quot;min&quot;:4,&quot;max&quot;:6,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Behavior&quot;},&quot;showDemoHint&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Behavior&quot;}}">
+const STAFF = [
+  { pin: '1042', name: 'Priya Nair', role: 'Cashier', avatar: 'https://i.pravatar.cc/96?img=45' },
+  { pin: '2318', name: 'Marco Reyes', role: 'Kitchen Staff', avatar: 'https://i.pravatar.cc/96?img=12' },
+  { pin: '7781', name: 'Nahid Zaman', role: 'Cashier', avatar: 'https://i.pravatar.cc/96?img=32' }
+];
+
+class Component extends DCLogic {
+  state = { mode: 'pin', pin: '', match: null, error: '', shaking: false, email: '', password: '', signedIn: null };
+
+  shakeNow() {
+    clearTimeout(this._on);
+    clearTimeout(this._off);
+    this.setState({ shaking: false });
+    this._on = setTimeout(() => this.setState({ shaking: true }), 20);
+    this._off = setTimeout(() => this.setState({ shaking: false }), 480);
+  }
+
+  componentWillUnmount() { clearTimeout(this._on); clearTimeout(this._off); }
+
+  fail(msg) {
+    this.setState({ error: msg, pin: '', match: null });
+    this.shakeNow();
+  }
+
+  press = (v) => {
+    const len = this.pinLength();
+    const s = this.state;
+    if (v === 'clear') return this.setState({ pin: '', match: null, error: '' });
+    if (v === 'back') return this.setState({ pin: s.pin.slice(0, -1), match: null, error: '' });
+    if (s.match) return;
+    const pin = (s.pin + v).slice(0, len);
+    if (pin.length < len) return this.setState({ pin, error: '' });
+    const hit = STAFF.find(m => m.pin === pin);
+    if (hit) this.setState({ pin, match: hit, error: '' });
+    else this.fail('Incorrect PIN');
+  };
+
+  pinLength() { return this.props.pinLength ?? 4; }
+
+  renderVals() {
+    const s = this.state;
+    const len = this.pinLength();
+    const dots = Array.from({ length: len }, (_, i) => ({
+      bg: i < s.pin.length ? '#00754A' : 'transparent',
+      bd: i < s.pin.length ? '#00754A' : '#d6dbde'
+    }));
+
+    const keyDefs = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'clear', '0', 'back'];
+    const keys = keyDefs.map(k => {
+      const util = k === 'clear' || k === 'back';
+      return {
+        body: k === 'clear' ? 'Clear' : k === 'back' ? '⌫' : k,
+        size: util ? '15px' : '24px',
+        bg: util ? '#f9f9f9' : '#ffffff',
+        fg: util ? 'rgba(0,0,0,0.58)' : 'rgba(0,0,0,0.87)',
+        bd: util ? '#edebe9' : '#d6dbde',
+        onPress: () => this.press(k)
+      };
+    });
+
+    const m = s.match;
+    return {
+      restaurantName: this.props.restaurantName ?? 'Verdant Café',
+      terminalLabel: this.props.terminalLabel ?? 'Terminal 1 · Front counter',
+      showHint: this.props.showDemoHint ?? true,
+      pinLength: len,
+      pinMode: s.mode === 'pin' && !s.signedIn,
+      pwMode: s.mode === 'password' && !s.signedIn,
+      signedIn: !!s.signedIn,
+      signedInName: s.signedIn || '',
+      onPinTab: () => this.setState({ mode: 'pin', error: '' }),
+      onPwTab: () => this.setState({ mode: 'password', error: '', pin: '', match: null }),
+      pinTabBg: s.mode === 'pin' ? '#ffffff' : 'transparent',
+      pinTabFg: s.mode === 'pin' ? '#00754A' : 'rgba(0,0,0,0.45)',
+      pinTabShadow: s.mode === 'pin' ? '0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24)' : 'none',
+      pwTabBg: s.mode === 'password' ? '#ffffff' : 'transparent',
+      pwTabFg: s.mode === 'password' ? '#00754A' : 'rgba(0,0,0,0.45)',
+      pwTabShadow: s.mode === 'password' ? '0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24)' : 'none',
+      dots, keys,
+      matched: !!m,
+      notMatched: !m,
+      matchedName: m ? m.name : '',
+      matchedFirst: m ? m.name.split(' ')[0] : '',
+      matchedRole: m ? m.role : '',
+      matchedAvatar: m ? m.avatar : '',
+      error: s.error,
+      notSignedIn: !s.signedIn,
+      shakeAnim: s.shaking ? 'shake 0.4s cubic-bezier(0.36,0.07,0.19,0.97) 1' : 'none',
+      email: s.email,
+      password: s.password,
+      onEmail: (e) => this.setState({ email: e.target.value, error: '' }),
+      onPassword: (e) => this.setState({ password: e.target.value, error: '' }),
+      onConfirm: () => this.setState({ signedIn: m ? m.name : '', pin: '', match: null }),
+      onSignIn: () => {
+        if (s.email.includes('@') && s.password.length >= 4) this.setState({ signedIn: 'Aisha Verma', error: '' });
+        else { this.setState({ error: 'Incorrect email or password', password: '' }); this.shakeNow(); }
+      },
+      onReset: () => this.setState({ signedIn: null, pin: '', match: null, email: '', password: '', error: '' })
+    };
+  }
+}
+</script>
+</body>
+</html>

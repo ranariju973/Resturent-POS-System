@@ -1,0 +1,333 @@
+import { Icon } from '../icons/Icon';
+import { usePos } from '../store';
+import { money, plural } from '../lib/format';
+import {
+  CARD_SHADOW,
+  IconButton,
+  PageHeading,
+  SearchInput,
+  Toggle,
+  card,
+  primaryPill,
+} from '../components/ui';
+import { CategoryModal, DeleteModal, ItemModal } from '../components/menuModals';
+
+export function MenuManagement() {
+  const { state, actions } = usePos();
+
+  const itemQuery = state.itemQuery.trim().toLowerCase();
+  const inCategory = state.items.filter((i) => i.cat === state.selCat);
+  const visible = inCategory.filter((i) => !itemQuery || i.name.toLowerCase().includes(itemQuery));
+
+  return (
+    <>
+      <main
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+          padding: 24,
+        }}
+      >
+        <PageHeading
+          title="Menu Management"
+          subtitle="Categories and items that populate the POS grid"
+          right={
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(0,0,0,0.58)' }}>
+              {inCategory.length} items in {state.selCat || '—'}
+            </span>
+          }
+        />
+
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 24 }}>
+          <section
+            style={{
+              ...card,
+              width: 288,
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+              padding: 16,
+            }}
+          >
+            <button
+              type="button"
+              className="press hv-primary"
+              onClick={() => actions.openCatModal(null)}
+              style={{ ...primaryPill, width: '100%', justifyContent: 'center', padding: '11px 18px' }}
+            >
+              <Icon icon="lucide:plus" />
+              Add Category
+            </button>
+
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                paddingRight: 2,
+              }}
+            >
+              {state.cats.map((cat) => {
+                const active = cat.name === state.selCat;
+                const count = state.items.filter((i) => i.cat === cat.name).length;
+                const showTools = active || state.hoverCat === cat.name;
+                return (
+                  <div
+                    key={cat.name}
+                    onClick={() => actions.patch({ selCat: cat.name, itemQuery: '' })}
+                    onMouseEnter={() => actions.patch({ hoverCat: cat.name })}
+                    onMouseLeave={() => actions.patch({ hoverCat: '' })}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '11px 12px',
+                      borderRadius: 12,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      background: active ? '#d4e9e2' : '#ffffff',
+                      border: `1px solid ${active ? '#00754A' : '#edebe9'}`,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        flexShrink: 0,
+                        background: cat.color,
+                      }}
+                    />
+                    <span
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 2,
+                        minWidth: 0,
+                        flex: 1,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 14,
+                          fontWeight: active ? 700 : 600,
+                          color: active ? '#1E3932' : 'rgba(0,0,0,0.87)',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {cat.name}
+                      </span>
+                      <span
+                        style={{ fontSize: 11, fontWeight: 500, color: 'rgba(0,0,0,0.45)' }}
+                      >
+                        {plural(count, 'item')}
+                      </span>
+                    </span>
+                    <span
+                      style={{
+                        display: 'flex',
+                        gap: 6,
+                        flexShrink: 0,
+                        transition: 'opacity 0.2s ease',
+                        opacity: showTools ? 1 : 0,
+                      }}
+                    >
+                      <IconButton
+                        icon="lucide:pencil"
+                        title="Edit category"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          actions.openCatModal(cat);
+                        }}
+                      />
+                      <IconButton
+                        icon="lucide:trash-2"
+                        title="Delete category"
+                        danger
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          actions.openDeleteModal('cat', cat.name);
+                        }}
+                      />
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section
+            style={{
+              ...card,
+              flex: 1,
+              minWidth: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16,
+              padding: 16,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <SearchInput
+                placeholder={`Search items in ${state.selCat || 'No category'}`}
+                value={state.itemQuery}
+                onChange={(itemQuery) => actions.patch({ itemQuery })}
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <button
+                type="button"
+                className="press hv-primary"
+                onClick={() => actions.openItemModal(null)}
+                style={{ ...primaryPill, flexShrink: 0 }}
+              >
+                <Icon icon="lucide:plus" />
+                Add Menu Item
+              </button>
+            </div>
+
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                padding: '2px 4px 4px 2px',
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: 16,
+                alignContent: 'start',
+              }}
+            >
+              {visible.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    border: '1px solid rgba(0,0,0,0.07)',
+                    background: '#ffffff',
+                    boxShadow: CARD_SHADOW,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                  }}
+                >
+                  <img
+                    src={item.img}
+                    alt={item.name}
+                    style={{
+                      width: '100%',
+                      height: 104,
+                      borderRadius: 10,
+                      objectFit: 'cover',
+                      display: 'block',
+                      background: '#edebe9',
+                    }}
+                  />
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 600,
+                        color: 'rgba(0,0,0,0.87)',
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {item.name}
+                    </span>
+                    <span
+                      style={{
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                      }}
+                    >
+                      <span style={{ fontSize: 15, fontWeight: 700, color: '#00754A' }}>
+                        {money(item.price)}
+                      </span>
+                      <span style={{ fontSize: 11, fontWeight: 500, color: 'rgba(0,0,0,0.45)' }}>
+                        {item.cat}
+                      </span>
+                    </span>
+                  </span>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      paddingTop: 2,
+                      borderTop: '1px solid #edebe9',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="press"
+                      onClick={() => actions.toggleAvailable(item.id)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 12px 6px 6px',
+                        borderRadius: 50,
+                        border: 0,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        background: item.available ? '#d4e9e2' : '#f2f0eb',
+                        color: item.available ? '#00754A' : 'rgba(0,0,0,0.45)',
+                      }}
+                    >
+                      <Toggle on={item.available} />
+                      {item.available ? 'In stock' : 'Sold out'}
+                    </button>
+                    <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                      <IconButton
+                        icon="lucide:pencil"
+                        title="Edit item"
+                        onClick={() => actions.openItemModal(item)}
+                      />
+                      <IconButton
+                        icon="lucide:trash-2"
+                        title="Delete item"
+                        danger
+                        onClick={() => actions.openDeleteModal('item', item.id)}
+                      />
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {visible.length === 0 ? (
+              <p
+                style={{
+                  margin: 0,
+                  padding: '24px 0',
+                  textAlign: 'center',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  color: 'rgba(0,0,0,0.58)',
+                }}
+              >
+                Nothing here yet — add a menu item to this category.
+              </p>
+            ) : null}
+          </section>
+        </div>
+      </main>
+
+      <CategoryModal />
+      <ItemModal />
+      <DeleteModal />
+    </>
+  );
+}
