@@ -34,6 +34,17 @@ export default defineConfig(({ mode }) => {
           target,
           changeOrigin: false, // keep the Host header so cookie scoping is unchanged
           secure: false,
+          // The proxy exists to make /api same-origin, but browsers still
+          // attach an Origin header on POSTs (and on any cross-origin preview
+          // host). Forwarding it makes the backend's strict CORS allow-list
+          // reject requests that are, by this proxy's design, same-origin.
+          // Stripping it here means the backend sees them the same way it
+          // sees a same-origin request in production behind one domain.
+          configure: (proxy) => {
+            proxy.on('proxyReq', (proxyReq) => {
+              proxyReq.removeHeader('origin');
+            });
+          },
         },
       },
     },
