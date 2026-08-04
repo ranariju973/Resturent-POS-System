@@ -8,7 +8,13 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
+// dotenv never overwrites a variable that is already set, so precedence is:
+// real process env > .env > .env.development.local. The second file is where
+// managed dev environments (e.g. v0 / Vercel sandboxes) mirror the project's
+// environment variables — without it the server can only boot when someone
+// hand-copies .env.example, even though every value is already on disk.
 dotenv.config();
+dotenv.config({ path: '.env.development.local' });
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -17,7 +23,9 @@ const bytes = z.coerce.number().int().positive();
 const schema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-    PORT: z.coerce.number().int().min(1).max(65535).default(5000),
+    // 5001 matches .env.example and the frontend dev proxy's default target
+    // (vite.config.ts). 5000 collides with macOS AirPlay Receiver anyway.
+    PORT: z.coerce.number().int().min(1).max(65535).default(5001),
 
     MONGO_URI: z
       .string()
