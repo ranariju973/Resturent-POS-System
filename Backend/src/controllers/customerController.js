@@ -38,6 +38,46 @@ const publicCustomer = (customer, stats) => ({
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/customers/lookup
+// ---------------------------------------------------------------------------
+/**
+ * Resolve a phone number to a customer, for the billing screen's auto-fill.
+ *
+ * ── This endpoint is a reverse phone directory if built carelessly ─────────
+ * It answers "who owns this number" to anyone holding a POS login. Four things
+ * keep that from being a way to harvest the customer list, and all four are
+ * load-bearing:
+ *
+ *   1. EXACT match on the full normalised number. Deliberately NOT
+ *      `Customer.search()`, which prefix-matches phones — a prefix search here
+ *      would let a caller walk the list one digit at a time.
+ *   2. The narrowest useful response: found, id, name. No email, no notes, no
+ *      visit history. The billing screen needs a name to show and an id to
+ *      attach to the order; anything more is a leak with no caller.
+ *   3. A per-user rate limit on the route (see `lookupLimiter`).
+ *   4. The same answer shape whether or not there was a match, so "no such
+ *      customer" is not distinguishable by anything except the flag itself.
+ *
+ * If a future change makes this return more fields, revisit all four.
+ */
+export const lookupByPhone = asyncHandler(async (req, res) => {
+  const digits = normalizePhone(req.query.phone);
+
+  // The validator already enforces a minimum, but this is the guard that would
+  // matter if the schema were ever loosened: an empty or near-empty query must
+  // never turn into a match-everything lookup.
+  if (digits.length < 6) return sendSuccess(res, { found: false });
+
+  const customer = await Customer.findOne({ phoneNormalized: digits, isActive: true }).select(
+    'name',
+  );
+
+  if (!customer) return sendSuccess(res, { found: false });
+
+  return sendSuccess(res, { found: true, id: String(customer._id), name: customer.name });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/customers
 // ---------------------------------------------------------------------------
 /**
@@ -349,6 +389,7 @@ export const deleteCustomer = asyncHandler(async (req, res) => {
 });
 
 export default {
+  lookupByPhone,
   listCustomers,
   getCustomer,
   getCustomerHistory,

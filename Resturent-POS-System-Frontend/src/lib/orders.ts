@@ -1,4 +1,14 @@
-import type { MenuItem, OrderEntry, TicketStatus } from '../data/types';
+import type { MenuItem, OrderEntry, TicketItem, TicketStatus } from '../data/types';
+
+/**
+ * Covers on a kitchen ticket.
+ *
+ * Separate from `orderCount` because a ticket carries name snapshots rather
+ * than menu item ids — the kitchen is never sent prices, so there is nothing
+ * to resolve and no total to compute.
+ */
+export const ticketItemCount = (items: TicketItem[]) =>
+  items.reduce((sum, line) => sum + line.qty, 0);
 
 export interface ResolvedLine {
   id: string;

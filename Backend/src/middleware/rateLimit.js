@@ -119,4 +119,24 @@ export const apiLimiter = rateLimit({
   max: 300,
 });
 
-export default { loginLimiter, refreshLimiter, apiLimiter };
+/**
+ * Customer phone lookup.
+ *
+ * This one is not about load, it is about enumeration. The endpoint answers
+ * "which customer owns this number", so an unbounded budget turns any POS
+ * login into a reverse phone directory that can be walked at machine speed.
+ *
+ * Keyed on the authenticated user rather than the IP: every terminal in a
+ * restaurant shares one NAT address, so an IP budget would either be so large
+ * it stops nothing or so small it throttles the second till. A cashier does a
+ * handful of lookups per shift; 60 an hour is generous for real use and
+ * useless for harvesting a list.
+ */
+export const lookupLimiter = rateLimit({
+  ...baseOptions,
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => (req.user?.id ? `user:${req.user.id}` : ipKeyGenerator(req)),
+});
+
+export default { loginLimiter, refreshLimiter, apiLimiter, lookupLimiter };

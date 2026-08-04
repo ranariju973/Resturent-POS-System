@@ -44,6 +44,11 @@ const SPEC = {
   [P.POS_APPLY_DISCOUNT]: [ADMIN, CASHIER],
   [P.POS_VOID_ORDER]: [ADMIN],
   [P.POS_OVERRIDE]: [ADMIN],
+  // Admin only, and listed apart from POS_VOID_ORDER on purpose. Voiding is
+  // service recovery; this destroys the record of a sale. If these two ever
+  // end up sharing a row, the destructive one has been handed to whoever
+  // needs the ordinary one.
+  [P.ORDER_DELETE]: [ADMIN],
 
   [P.MENU_VIEW]: [ADMIN, CASHIER, KITCHEN],
   [P.MENU_TOGGLE_STOCK]: [ADMIN, CASHIER, KITCHEN],
@@ -64,7 +69,7 @@ const SPEC = {
   [P.CUSTOMER_VIEW]: [ADMIN, CASHIER],
   [P.CUSTOMER_CREATE]: [ADMIN, CASHIER],
   [P.CUSTOMER_EDIT]: [ADMIN, CASHIER],
-  [P.CUSTOMER_DELETE]: [ADMIN, CASHIER],
+  [P.CUSTOMER_DELETE]: [ADMIN],
 
   [P.REPORTS_VIEW]: [ADMIN],
 
@@ -116,8 +121,11 @@ t('CANNOT void a paid order unaided', !hasPermission(CASHIER, P.POS_VOID_ORDER))
 t('CANNOT self-authorise an override', !hasPermission(CASHIER, P.POS_OVERRIDE));
 t('CAN take orders and apply a normal discount',
   hasAllPermissions(CASHIER, [P.POS_CREATE_ORDER, P.POS_APPLY_DISCOUNT]));
-t('CAN fully manage customers',
-  hasAllPermissions(CASHIER, [P.CUSTOMER_VIEW, P.CUSTOMER_CREATE, P.CUSTOMER_EDIT, P.CUSTOMER_DELETE]));
+t('CAN view, add and edit customers',
+  hasAllPermissions(CASHIER, [P.CUSTOMER_VIEW, P.CUSTOMER_CREATE, P.CUSTOMER_EDIT]));
+// Deleting a customer removes the contact details a refund or complaint would
+// be traced through. That is an owner's call, not counter tidying.
+t('CANNOT delete a customer', !hasPermission(CASHIER, P.CUSTOMER_DELETE));
 t('CANNOT manage users or read the audit log',
   !hasAnyPermission(CASHIER, [P.USER_MANAGE, P.AUDIT_VIEW]));
 
@@ -206,7 +214,7 @@ const ROUTES = [
   ['GET', '/api/kitchen/tickets', P.KITCHEN_VIEW, [ADMIN, CASHIER, KITCHEN]],
   ['PATCH', '/api/kitchen/tickets/:id/advance', P.KITCHEN_ADVANCE_STATUS, [ADMIN, CASHIER, KITCHEN]],
   ['GET', '/api/customers', P.CUSTOMER_VIEW, [ADMIN, CASHIER]],
-  ['DELETE', '/api/customers/:id', P.CUSTOMER_DELETE, [ADMIN, CASHIER]],
+  ['DELETE', '/api/customers/:id', P.CUSTOMER_DELETE, [ADMIN]],
   ['GET', '/api/reports/daily', P.REPORTS_VIEW, [ADMIN]],
   ['GET', '/api/reports/pnl', P.REPORTS_VIEW, [ADMIN]],
   ['GET', '/api/reports/expenses', P.REPORTS_VIEW, [ADMIN]],

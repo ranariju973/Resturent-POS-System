@@ -263,7 +263,7 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const routeSrc = fs.readFileSync(path.join(ROOT, 'src/routes/menu.js'), 'utf8');
 
 const declarations = [...routeSrc.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']+)'/g)];
-t(`${declarations.length} routes declared`, declarations.length === 10, `${declarations.length}`);
+t(`${declarations.length} routes declared`, declarations.length === 11, `${declarations.length}`);
 
 // Each router.X( ... ) block should name a permission.
 const blocks = routeSrc.split(/router\.(?=get|post|put|patch|delete)/).slice(1);
@@ -289,6 +289,31 @@ t('the replaced image is deleted only AFTER a successful save',
   ctlSrc.indexOf('await item.save()') < ctlSrc.indexOf("'image-replaced'"));
 t('search term is regex-escaped', /escapeRegex\(search\)/.test(ctlSrc));
 t('soft delete keeps the document for order history', /softDelete\(\)/.test(ctlSrc));
+
+// --- purge ------------------------------------------------------------------
+// The safety property of the hard delete is the order-history check, so these
+// assert the check exists, runs FIRST, and that nothing else in the file
+// reaches for deleteOne on a menu item without it.
+t('purge is admin-only (MENU_DELETE)',
+  /'\/items\/:id\/purge',\s*\n\s*requirePermission\(PERMISSIONS\.MENU_DELETE\)/.test(routeSrc));
+t('purge declared before /items/:id so it is not swallowed',
+  routeSrc.indexOf("'/items/:id/purge'") < routeSrc.indexOf("'/items/:id'"));
+t('purge refuses when the item appears on an order',
+  /Order\.exists\(\{\s*'items\.menuItem'/.test(ctlSrc));
+
+const purgeBody = ctlSrc.slice(ctlSrc.indexOf('export const purgeItem'));
+t('the history check runs before the delete, not after',
+  purgeBody.indexOf('Order.exists') < purgeBody.indexOf('MenuItem.deleteOne'));
+t('the row is dropped before the Cloudinary asset',
+  purgeBody.indexOf('MenuItem.deleteOne') < purgeBody.indexOf("'item-purged'"));
+t('purge is audited with a snapshot, since the row will be gone',
+  /MENU_ITEM_PURGE/.test(purgeBody) && /meta: snapshot/.test(purgeBody));
+t('deleteOne on a menu item appears only inside purge',
+  (ctlSrc.match(/MenuItem\.deleteOne/g) ?? []).length === 1);
+
+const orderSrc = fs.readFileSync(path.join(ROOT, 'src/models/Order.js'), 'utf8');
+t('the history check is index-backed, not a collection scan',
+  /index\(\{\s*'items\.menuItem': 1\s*\}\)/.test(orderSrc));
 t('price changes are audited', /MENU_ITEM_PRICE_CHANGE/.test(ctlSrc));
 t('availability handler assigns one field, not the body',
   /item\.available = available;/.test(ctlSrc) && !/Object\.assign\(item, req\.body\)/.test(ctlSrc));

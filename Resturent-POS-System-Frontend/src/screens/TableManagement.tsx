@@ -1,261 +1,132 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../icons/Icon';
-import { ZONES } from '../data/seed';
-import type { Table } from '../data/types';
 import { usePos } from '../store';
 import { duration, minutesSince, money } from '../lib/format';
-import { resolveOrder } from '../lib/orders';
-import { CARD_SHADOW, FilterPill, PageHeading, Toggle, card, outlinePill } from '../components/ui';
+import {
+  Field,
+  ModalActions,
+  ModalOverlay,
+  ModalTitle,
+  Toggle,
+  bareInput,
+  outlinePill,
+} from '../components/ui';
+import { TableFloor } from './tableFloor';
 
 /** Occupied tables past this many minutes get a red elapsed figure. */
 const LATE_MINUTES = 45;
 
+/**
+ * Table Management — the floor grid, the detail panel and the add/edit form.
+ *
+ * The grid lives in ./tableFloor.tsx. It was extracted when this file passed a
+ * thousand lines and the floor view, the slide-over panel and the modal were
+ * interleaved in a way that made it hard to see which markup belonged to which.
+ */
 export function TableManagement() {
-  const { state, actions } = usePos();
-  const inZone = state.tables.filter((t) => state.zone === 'All' || t.zone === state.zone);
-  const occupied = inZone.filter((t) => t.status === 'occupied').length;
-
+  const { state } = usePos();
   return (
     <>
-      <main
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 16,
-          padding: 24,
-        }}
-      >
-        <PageHeading
-          wrap
-          title="Table Management"
-          subtitle={`${occupied} of ${inZone.length} tables occupied`}
-          right={
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 16,
-                padding: '9px 16px',
-                borderRadius: 50,
-                background: '#ffffff',
-                boxShadow: CARD_SHADOW,
-              }}
-            >
-              <LegendKey label="Available" bg="#ffffff" border="#00754A" />
-              <LegendKey label="Occupied" bg="#f0dcb0" border="#cba258" />
-              <LegendKey label="Reserved" bg="#f4f3f0" border="#d6dbde" />
-            </div>
-          }
-        />
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {ZONES.map((zone) => (
-            <FilterPill
-              key={zone}
-              label={zone}
-              active={zone === state.zone}
-              onClick={() => actions.patch({ zone })}
-            />
-          ))}
-        </div>
-
-        <div
-          style={{
-            ...card,
-            flex: 1,
-            minHeight: 0,
-            overflowY: 'auto',
-            padding: 16,
-          }}
-        >
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
-              gap: 16,
-              alignContent: 'start',
-            }}
-          >
-            {inZone.map((table) => (
-              <TableTile key={table.id} table={table} />
-            ))}
-          </div>
-        </div>
-      </main>
-
+      <TableFloor />
       {state.selTable ? <TablePanel /> : null}
+      <TableModal />
     </>
   );
 }
 
-function LegendKey({ label, bg, border }: { label: string; bg: string; border: string }) {
-  return (
-    <span
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 7,
-        fontSize: 12,
-        fontWeight: 600,
-        color: 'rgba(0,0,0,0.58)',
-      }}
-    >
-      <span
-        style={{ width: 12, height: 12, borderRadius: 4, background: bg, border: `2px solid ${border}` }}
-      />
-      {label}
-    </span>
-  );
-}
-
-function TableTile({ table }: { table: Table }) {
+/**
+ * Add or edit a table.
+ *
+ * Seats is a free number rather than a preset list — a restaurant has a
+ * six-top and a two-top and occasionally an eleven, and forcing those into
+ * fixed options means someone files an eleven as "12" and the covers count is
+ * quietly wrong from then on. The server caps it at 50.
+ */
+function TableModal() {
   const { state, actions } = usePos();
-  const occupied = table.status === 'occupied';
-  const reserved = table.status === 'reserved';
-  const mins = minutesSince(table.startedAt);
-  const late = mins >= LATE_MINUTES;
-  const total = resolveOrder(table.order, state.items).reduce((a, l) => a + l.price * l.qty, 0);
+  const modal = state.modal;
+  if (modal?.kind !== 'table') return null;
+
+  const editing = modal.mode === 'edit';
+  const target = editing ? state.tables.find((t) => t.id === modal.target) : undefined;
 
   return (
-    <button
-      type="button"
-      className="press hv-lift"
-      onClick={() => actions.openTable(table)}
-      style={{
-        position: 'relative',
-        textAlign: 'left',
-        minHeight: 138,
-        padding: 14,
-        borderRadius: 12,
-        border: `2px solid ${occupied ? '#cba258' : reserved ? '#d6dbde' : '#00754A'}`,
-        background: occupied ? '#f8ecd2' : reserved ? '#f4f3f0' : '#ffffff',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-      }}
-    >
-      <span
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 22,
-            fontWeight: 800,
-            lineHeight: 1,
-            color: occupied ? '#6b4f12' : reserved ? 'rgba(0,0,0,0.45)' : '#00754A',
-          }}
-        >
-          {table.name}
-        </span>
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-            padding: '3px 10px',
-            borderRadius: 50,
-            background: occupied ? '#f0dcb0' : reserved ? '#edebe9' : '#d4e9e2',
-            color: occupied ? '#6b4f12' : reserved ? 'rgba(0,0,0,0.45)' : '#00754A',
-          }}
-        >
-          {occupied ? 'Occupied' : reserved ? 'Reserved' : 'Available'}
-        </span>
-      </span>
+    <ModalOverlay maxWidth={420}>
+      <ModalTitle>{editing ? `Edit ${target?.name ?? 'table'}` : 'Add a table'}</ModalTitle>
 
-      <span
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          fontSize: 12,
-          fontWeight: 600,
-          color: occupied ? '#8a6a24' : 'rgba(0,0,0,0.45)',
-        }}
-      >
-        <Icon icon="lucide:users" size={14} />
-        {table.seats} seats
-      </span>
-
-      {occupied ? (
-        <span
+      {/*
+        Say it up front rather than letting them fill the form and be refused:
+        the server will not reconfigure a table while people are sitting at it.
+      */}
+      {editing && target?.status === 'occupied' ? (
+        <p
           style={{
-            marginTop: 'auto',
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'space-between',
-            gap: 8,
-          }}
-        >
-          <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                letterSpacing: '0.06em',
-                color: '#8a6a24',
-              }}
-            >
-              Elapsed
-            </span>
-            <span
-              style={{
-                fontSize: 26,
-                fontWeight: 800,
-                lineHeight: 1,
-                color: late ? '#c82014' : '#6b4f12',
-              }}
-            >
-              {duration(mins)}
-            </span>
-          </span>
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#6b4f12' }}>{money(total)}</span>
-        </span>
-      ) : (
-        <span
-          style={{
-            marginTop: 'auto',
-            fontSize: 12,
+            margin: 0,
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: '#f8ecd2',
+            fontSize: 13,
             fontWeight: 600,
-            color: 'rgba(0,0,0,0.45)',
+            color: '#6b4f12',
           }}
         >
-          Tap to start an order
-        </span>
-      )}
-
-      {table.merge ? (
-        <span
-          style={{
-            position: 'absolute',
-            top: -9,
-            left: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            padding: '3px 10px',
-            borderRadius: 50,
-            background: '#1E3932',
-            color: '#ffffff',
-            fontSize: 10,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-          }}
-        >
-          <Icon icon="lucide:link" size={11} />
-          Merged
-        </span>
+          This table is occupied. Reconfiguring it will be refused until the bill is settled.
+        </p>
       ) : null}
-    </button>
+
+      <div style={{ display: 'flex', gap: 12 }}>
+        <Field label="Name" htmlFor="tblname" style={{ flex: 1 }}>
+          <input
+            id="tblname"
+            type="text"
+            autoFocus
+            placeholder="T7"
+            value={state.tableDraft.name}
+            onChange={(e) => actions.setTableDraft({ name: e.target.value })}
+            style={bareInput}
+          />
+        </Field>
+
+        <Field label="Seats" htmlFor="tblseats" style={{ width: 96, flexShrink: 0 }}>
+          <input
+            id="tblseats"
+            type="number"
+            min={1}
+            max={50}
+            value={state.tableDraft.seats}
+            onChange={(e) => actions.setTableDraft({ seats: e.target.value })}
+            style={bareInput}
+          />
+        </Field>
+      </div>
+
+      {/*
+        A list of existing zones to pick from, but still a free text field —
+        an admin adding a terrace should not have to edit code to name it.
+      */}
+      <Field label="Zone" htmlFor="tblzone">
+        <input
+          id="tblzone"
+          type="text"
+          list="zonelist"
+          placeholder="Indoor"
+          value={state.tableDraft.zone}
+          onChange={(e) => actions.setTableDraft({ zone: e.target.value })}
+          style={bareInput}
+        />
+        <datalist id="zonelist">
+          {state.zones.map((z) => (
+            <option key={z} value={z} />
+          ))}
+        </datalist>
+      </Field>
+
+      {state.tableError ? (
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#c82014' }}>{state.tableError}</span>
+      ) : null}
+
+      <ModalActions onCancel={actions.closeModal} onSave={() => void actions.saveTable()} />
+    </ModalOverlay>
   );
 }
 
@@ -265,10 +136,18 @@ function TablePanel() {
   if (!table) return null;
 
   const group = table.merge ? state.tables.filter((t) => t.merge === table.merge) : [table];
-  const rows = group.flatMap((g) =>
-    resolveOrder(g.order, state.items).map((l) => ({ ...l, from: g.name })),
-  );
-  const total = rows.reduce((a, l) => a + l.price * l.qty, 0);
+
+  // Lines come from the fetched bill for the selected table. A merged group
+  // still totals from each table's own reported total, because the server
+  // keeps one order per table even when they share a tab.
+  const rows = (state.tableOrder?.items ?? []).map((line) => ({
+    id: line.id,
+    name: line.name,
+    price: line.unitPrice,
+    qty: line.qty,
+    from: table.name,
+  }));
+  const total = group.reduce((a, g) => a + g.orderTotal, 0);
   const mins = minutesSince(table.startedAt);
 
   const available = state.tables.filter((t) => t.status === 'available');
@@ -590,10 +469,7 @@ function TablePanel() {
             empty={mergeCandidates.length === 0 ? 'No other occupied tables to merge with.' : null}
           >
             {mergeCandidates.map((t) => {
-              const value = resolveOrder(t.order, state.items).reduce(
-                (a, l) => a + l.price * l.qty,
-                0,
-              );
+              const value = t.orderTotal;
               return (
                 <button
                   key={t.id}

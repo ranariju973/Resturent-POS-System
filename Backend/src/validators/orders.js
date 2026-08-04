@@ -47,14 +47,49 @@ const items = z
   // Bounded so one request cannot ask the server to price a thousand lines.
   .max(100, 'Too many distinct items in one order');
 
+/**
+ * A customer captured at the till, keyed by phone.
+ *
+ * The phone number is the identity: the model already holds a unique index on
+ * its normalised form, so the same person entered as '+91 98200 41122' at one
+ * terminal and '9820041122' at another resolves to one record rather than two.
+ *
+ * `name` is optional here because a returning customer already has one stored.
+ * The controller requires it only when the number is unknown — see the note
+ * there for why an unnamed new customer is refused rather than filed as
+ * "Guest".
+ */
+const inlineCustomer = z
+  .object({
+    phone: z
+      .string()
+      .trim()
+      .min(6, 'Phone number is too short')
+      .max(24, 'Phone number is too long')
+      .regex(/^[+]?[\d\s()-]+$/, 'Phone number may contain only digits, spaces and + ( ) -')
+      .refine((v) => v.replace(/\D/g, '').length >= 6, {
+        message: 'Phone number needs at least 6 digits',
+      }),
+    name: z.string().trim().min(2, 'Name is too short').max(80, 'Name is too long').optional(),
+  })
+  .strict();
+
 export const createOrderSchema = z
   .object({
     type: z.enum(ORDER_TYPE_VALUES, { errorMap: () => ({ message: 'Invalid order type' }) }),
     tableId: objectId.optional(),
     customerId: objectId.optional(),
+    customer: inlineCustomer.optional(),
     items,
   })
   .strict()
+  // Both would be two different answers to "who is this order for". Rather
+  // than silently picking one, refuse — a client sending both has a bug, and
+  // resolving it quietly means shipping that bug attached to someone's bill.
+  .refine((body) => !(body.customerId && body.customer), {
+    message: 'Send either customerId or customer, not both',
+    path: ['customer'],
+  })
   // A dine-in order without a table has nowhere to be served; a takeaway with
   // one blocks a table that nobody is sitting at.
   .refine((body) => body.type !== 'dine-in' || Boolean(body.tableId), {
@@ -164,6 +199,23 @@ export const voidSchema = z
   })
   .strict();
 
+/**
+ * Permanently delete an order.
+ *
+ * The reason is mandatory and longer than a void's, because this is the more
+ * destructive of the two and the audit entry is all that survives it. A void
+ * at least leaves the order behind to be inspected; this leaves one log line.
+ */
+export const deleteOrderSchema = z
+  .object({
+    reason: z
+      .string()
+      .trim()
+      .min(10, 'Explain why this order is being permanently deleted')
+      .max(200, 'Reason is too long'),
+  })
+  .strict();
+
 /** List filters. Bounded, and date-range-capped in the controller. */
 export const listOrdersSchema = z
   .object({
@@ -184,6 +236,7 @@ export default {
   discountSchema,
   paySchema,
   voidSchema,
+  deleteOrderSchema,
   listOrdersSchema,
   idParamSchema,
 };

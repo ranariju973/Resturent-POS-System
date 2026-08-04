@@ -1,9 +1,17 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../icons/Icon';
 import { CONFIG, usePos } from '../store';
 import { clockTime, money, plural } from '../lib/format';
-import { STATUS_BADGE, orderCount, orderValue } from '../lib/orders';
-import { CARD_SHADOW, StatusBadge, card, tableHeaderCell } from '../components/ui';
+import { CARD_SHADOW, LoadState, StatusBadge, card, tableHeaderCell } from '../components/ui';
+import { PERMISSIONS, can } from '../lib/permissions';
+import { OrderDetail } from '../components/OrderDetail';
+
+/** Order status colours. Voided is muted, not alarming — it is a normal outcome. */
+const ORDER_BADGE: Record<'open' | 'paid' | 'voided', { bg: string; fg: string; label: string }> = {
+  open: { bg: '#f8ecd2', fg: '#6b4f12', label: 'Open' },
+  paid: { bg: '#d4e9e2', fg: '#00754A', label: 'Paid' },
+  voided: { bg: '#f4f3f0', fg: 'rgba(0,0,0,0.45)', label: 'Voided' },
+};
 
 const ROW_GRID: CSSProperties = {
   minWidth: 700,
@@ -14,11 +22,22 @@ const ROW_GRID: CSSProperties = {
 
 export function Dashboard() {
   const { state, actions } = usePos();
-  const tickets = state.tickets;
+  const dash = state.dash;
 
-  const sales = tickets.reduce((sum, t) => sum + orderValue(t.order, state.items), 0);
-  const pending = tickets.filter((t) => t.status === 'pending').length;
-  const completed = tickets.filter((t) => t.status === 'served').length;
+  useEffect(() => {
+    void actions.loadDashboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Every figure here is the server's. The previous version summed open table
+  // bills, which counted unpaid tabs as takings and ignored anything already
+  // settled — it agreed with the till only by accident.
+  const sales = dash?.todaySales ?? 0;
+  const orders = dash?.todayOrders ?? 0;
+  const pending = dash?.pendingOrders ?? 0;
+  const completed = dash?.completedOrders ?? 0;
+  const recent = dash?.recentOrders ?? [];
+  const mayDelete = can(state.user?.permissions, PERMISSIONS.ORDER_DELETE);
 
   return (
     <main
@@ -61,7 +80,7 @@ export function Dashboard() {
           iconBg="#f2f0eb"
           iconColor="#1E3932"
           label="Today's Orders"
-          value={String(tickets.length)}
+          value={String(orders)}
         />
 
         <button
@@ -135,56 +154,84 @@ export function Dashboard() {
         <div style={{ overflowX: 'auto' }}>
           <div style={{ ...ROW_GRID, padding: '0 12px 10px', borderBottom: '1px solid #edebe9' }}>
             <span style={tableHeaderCell}>Order</span>
-            <span style={tableHeaderCell}>Table / Customer</span>
+            <span style={tableHeaderCell}>Type</span>
             <span style={tableHeaderCell}>Items</span>
             <span style={tableHeaderCell}>Total</span>
             <span style={tableHeaderCell}>Status</span>
             <span style={{ ...tableHeaderCell, textAlign: 'right' }}>Time</span>
           </div>
 
-          {tickets
-            .slice()
-            .sort((a, b) => b.placedAt - a.placedAt)
-            .map((ticket) => {
-              const badge = STATUS_BADGE[ticket.status];
-              return (
-                <div
-                  key={ticket.id}
-                  style={{
-                    ...ROW_GRID,
-                    alignItems: 'center',
-                    padding: '13px 12px',
-                    borderBottom: '1px solid #f4f3f0',
-                  }}
-                >
-                  <span style={{ fontSize: 14, fontWeight: 700, color: 'rgba(0,0,0,0.87)' }}>
-                    #{ticket.no}
-                  </span>
-                  <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(0,0,0,0.87)' }}>
-                    {ticket.source}
-                  </span>
-                  <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(0,0,0,0.58)' }}>
-                    {plural(orderCount(ticket.order), 'item')}
-                  </span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#00754A' }}>
-                    {money(orderValue(ticket.order, state.items))}
-                  </span>
-                  <StatusBadge {...badge} />
-                  <span
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 500,
-                      color: 'rgba(0,0,0,0.45)',
-                      textAlign: 'right',
-                    }}
-                  >
-                    {clockTime(ticket.placedAt)}
-                  </span>
-                </div>
-              );
-            })}
+          {recent.map((order) => (
+            <button
+              key={order.id}
+              type="button"
+              className="press hv-lift"
+              onClick={() => void actions.viewOrderDetail(order.id)}
+              style={{
+                ...ROW_GRID,
+                width: '100%',
+                textAlign: 'left',
+                alignItems: 'center',
+                padding: '13px 12px',
+                border: 0,
+                borderBottom: '1px solid #f4f3f0',
+                background: 'transparent',
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'rgba(0,0,0,0.87)' }}>
+                #{order.orderNo}
+              </span>
+              <span
+                style={{
+                  fontSize: 14,
+                  fontWeight: 500,
+                  color: 'rgba(0,0,0,0.87)',
+                  textTransform: 'capitalize',
+                }}
+              >
+                {order.type}
+              </span>
+              <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(0,0,0,0.58)' }}>
+                {plural(order.itemCount, 'item')}
+              </span>
+              <span
+                style={{
+                  fontSize: 14,
+                  fontWeight: 700,
+                  // A voided total is struck through rather than hidden: the
+                  // amount is still a fact about what happened.
+                  color: order.status === 'voided' ? 'rgba(0,0,0,0.32)' : '#00754A',
+                  textDecoration: order.status === 'voided' ? 'line-through' : 'none',
+                }}
+              >
+                {money(order.total)}
+              </span>
+              <StatusBadge {...ORDER_BADGE[order.status]} />
+              <span
+                style={{
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: 'rgba(0,0,0,0.45)',
+                  textAlign: 'right',
+                }}
+              >
+                {clockTime(Date.parse(order.createdAt))}
+              </span>
+            </button>
+          ))}
+
+          <LoadState
+            loading={state.dashLoading && !dash}
+            error={state.dashError}
+            empty={!state.dashLoading && !state.dashError && recent.length === 0}
+            emptyMessage="No orders yet today."
+            onRetry={() => void actions.loadDashboard()}
+          />
         </div>
       </section>
+
+      <OrderDetail mayDelete={mayDelete} />
     </main>
   );
 }

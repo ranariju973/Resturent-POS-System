@@ -125,12 +125,20 @@ customerSchema.statics.search = function search(term, limit = 50) {
     .limit(Math.min(limit, 100));
 };
 
-/** Called on order settlement to keep the denormalised counters honest. */
-customerSchema.methods.recordVisit = function recordVisit(at = new Date()) {
-  return this.constructor.updateOne(
-    { _id: this._id },
-    { $set: { lastVisitAt: at }, $inc: { visitCount: 1 } },
-  );
+/**
+ * Bump the denormalised visit counters. Called on order settlement.
+ *
+ * A static taking an id, not an instance method: the caller (`payOrder`) has
+ * an order holding a customer id and no reason to load the whole customer
+ * document just to increment two fields. The instance-method version that used
+ * to live here was never called for exactly that reason, while payOrder
+ * open-coded the same update — one definition is harder to let drift.
+ *
+ * @param {import('mongoose').Types.ObjectId|string} id
+ * @param {Date} [at]
+ */
+customerSchema.statics.recordVisit = function recordVisit(id, at = new Date()) {
+  return this.updateOne({ _id: id }, { $set: { lastVisitAt: at }, $inc: { visitCount: 1 } });
 };
 
 export const Customer = mongoose.model('Customer', customerSchema);

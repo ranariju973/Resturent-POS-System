@@ -154,6 +154,10 @@ orderSchema.virtual('id').get(function idGetter() {
 
 // Dashboard and reports both scan by status over a date window.
 orderSchema.index({ status: 1, createdAt: -1 });
+// Multikey index over the line items, so "has this menu item ever been
+// ordered?" is a lookup rather than a scan of every order ever taken. The
+// purge check depends on it; without it that check gets slower every service.
+orderSchema.index({ 'items.menuItem': 1 });
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ createdBy: 1, createdAt: -1 });
 // One open order per table at a time — enforced by the database, not by a

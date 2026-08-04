@@ -53,6 +53,15 @@ const email = z
 /** Allergies, seating preferences. Length-capped free text. */
 const notes = z.string().trim().max(500, 'Notes are too long');
 
+/**
+ * Phone lookup query.
+ *
+ * Reuses the same `phone` rules as creation on purpose: the lookup must accept
+ * exactly what the create form accepts, or a number that saved fine would fail
+ * to find itself afterwards.
+ */
+export const lookupSchema = z.object({ phone }).strict();
+
 export const createCustomerSchema = z
   .object({
     name,
@@ -106,6 +115,7 @@ export const deleteCustomerSchema = z
   .strict();
 
 export default {
+  lookupSchema,
   createCustomerSchema,
   updateCustomerSchema,
   listCustomersSchema,

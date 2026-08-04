@@ -4,6 +4,7 @@ import { money, plural } from '../lib/format';
 import {
   CARD_SHADOW,
   IconButton,
+  LoadState,
   PageHeading,
   SearchInput,
   Toggle,
@@ -17,6 +18,9 @@ export function MenuManagement() {
 
   const itemQuery = state.itemQuery.trim().toLowerCase();
   const inCategory = state.items.filter((i) => i.cat === state.selCat);
+  // selCat is a category id, so the heading has to look the name up rather
+  // than print the key.
+  const selCatName = state.cats.find((c) => c.id === state.selCat)?.name ?? '';
   const visible = inCategory.filter((i) => !itemQuery || i.name.toLowerCase().includes(itemQuery));
 
   return (
@@ -36,7 +40,7 @@ export function MenuManagement() {
           subtitle="Categories and items that populate the POS grid"
           right={
             <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(0,0,0,0.58)' }}>
-              {inCategory.length} items in {state.selCat || '—'}
+              {inCategory.length} items in {selCatName || '—'}
             </span>
           }
         />
@@ -75,14 +79,14 @@ export function MenuManagement() {
               }}
             >
               {state.cats.map((cat) => {
-                const active = cat.name === state.selCat;
-                const count = state.items.filter((i) => i.cat === cat.name).length;
-                const showTools = active || state.hoverCat === cat.name;
+                const active = cat.id === state.selCat;
+                const count = state.items.filter((i) => i.cat === cat.id).length;
+                const showTools = active || state.hoverCat === cat.id;
                 return (
                   <div
-                    key={cat.name}
-                    onClick={() => actions.patch({ selCat: cat.name, itemQuery: '' })}
-                    onMouseEnter={() => actions.patch({ hoverCat: cat.name })}
+                    key={cat.id}
+                    onClick={() => actions.patch({ selCat: cat.id, itemQuery: '' })}
+                    onMouseEnter={() => actions.patch({ hoverCat: cat.id })}
                     onMouseLeave={() => actions.patch({ hoverCat: '' })}
                     style={{
                       display: 'flex',
@@ -178,7 +182,7 @@ export function MenuManagement() {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <SearchInput
-                placeholder={`Search items in ${state.selCat || 'No category'}`}
+                placeholder={`Search items in ${selCatName || 'No category'}`}
                 value={state.itemQuery}
                 onChange={(itemQuery) => actions.patch({ itemQuery })}
                 style={{ flex: 1, minWidth: 0 }}
@@ -255,7 +259,7 @@ export function MenuManagement() {
                         {money(item.price)}
                       </span>
                       <span style={{ fontSize: 11, fontWeight: 500, color: 'rgba(0,0,0,0.45)' }}>
-                        {item.cat}
+                        {item.catName}
                       </span>
                     </span>
                   </span>
@@ -307,20 +311,13 @@ export function MenuManagement() {
               ))}
             </div>
 
-            {visible.length === 0 ? (
-              <p
-                style={{
-                  margin: 0,
-                  padding: '24px 0',
-                  textAlign: 'center',
-                  fontSize: 14,
-                  fontWeight: 500,
-                  color: 'rgba(0,0,0,0.58)',
-                }}
-              >
-                Nothing here yet — add a menu item to this category.
-              </p>
-            ) : null}
+            <LoadState
+              loading={state.menuLoading}
+              error={state.menuError}
+              empty={!state.menuLoading && !state.menuError && visible.length === 0}
+              emptyMessage="Nothing here yet — add a menu item to this category."
+              onRetry={() => void actions.loadMenu()}
+            />
           </section>
         </div>
       </main>

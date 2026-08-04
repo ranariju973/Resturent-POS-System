@@ -303,12 +303,94 @@ t('admin ranges are capped at a year', /366 \* 24 \* 3600 \* 1000/.test(code));
 console.log('\n--- route wiring ---');
 const routes = fs.readFileSync(path.join(ROOT, 'src/routes/orders.js'), 'utf8');
 const declared = [...routes.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']+)'/g)];
-t(`${declared.length} routes declared`, declared.length === 7, `${declared.length}`);
+t(`${declared.length} routes declared`, declared.length === 8, `${declared.length}`);
 t('requireAuth applied router-wide', /router\.use\(requireAuth\(\)\)/.test(routes));
 const blocks = routes.split(/router\.(?=get|post|put|patch|delete)/).slice(1);
 t('every route names a permission',
   blocks.every((b) => b.slice(0, b.indexOf('\n);')).includes('requirePermission')));
 t('the discount route uses POS_APPLY_DISCOUNT', /POS_APPLY_DISCOUNT/.test(routes));
+
+// --- customers captured at the till ----------------------------------------
+console.log('\n--- the inline customer is keyed by phone ---');
+{
+  const ok = createOrderSchema.safeParse({
+    type: 'takeaway',
+    items: [{ menuItemId: 'a'.repeat(24), qty: 1 }],
+    customer: { phone: '98200 41122', name: 'Aarav Mehta' },
+  });
+  t('an order may carry a phone and a name', ok.success, ok.error?.issues?.[0]?.message);
+
+  const returning = createOrderSchema.safeParse({
+    type: 'takeaway',
+    items: [{ menuItemId: 'a'.repeat(24), qty: 1 }],
+    customer: { phone: '9820041122' },
+  });
+  t('a name is optional — a known number already has one', returning.success);
+
+  const both = createOrderSchema.safeParse({
+    type: 'takeaway',
+    items: [{ menuItemId: 'a'.repeat(24), qty: 1 }],
+    customerId: 'b'.repeat(24),
+    customer: { phone: '9820041122' },
+  });
+  t('customerId and customer together are refused, not silently merged', !both.success);
+
+  const junk = createOrderSchema.safeParse({
+    type: 'takeaway',
+    items: [{ menuItemId: 'a'.repeat(24), qty: 1 }],
+    customer: { phone: '123' },
+  });
+  t('a too-short number is rejected at the edge', !junk.success);
+
+  const extra = createOrderSchema.safeParse({
+    type: 'takeaway',
+    items: [{ menuItemId: 'a'.repeat(24), qty: 1 }],
+    customer: { phone: '9820041122', email: 'a@b.co' },
+  });
+  t('the inline customer is strict — no smuggling extra fields', !extra.success);
+}
+
+const inlineBody = ctl.slice(ctl.indexOf('async function resolveInlineCustomer'), ctl.indexOf('/** Human label for the kitchen board'));
+t('identity is the normalised phone, not the name', /normalizePhone\(inline\.phone\)/.test(inlineBody));
+t('a stored name is never overwritten by what was typed at the till',
+  !/existing\.name = name;[\s\S]{0,40}await existing\.save/.test(inlineBody) ||
+    /if \(!existing\.isActive\)/.test(inlineBody));
+t('an unknown number with no name is refused rather than filed as a guest',
+  /if \(!name\)[\s\S]{0,120}badRequest/.test(inlineBody));
+t('the customer is resolved inside the order transaction',
+  /withTransaction[\s\S]{0,600}resolveInlineCustomer/.test(ctl));
+t('visit counters go through the model, not open-coded in the controller',
+  /Customer\.recordVisit/.test(ctl) && !/\$inc: \{ visitCount/.test(ctl));
+
+// --- permanent deletion -----------------------------------------------------
+// The destructive one. These assert the guardrails rather than the happy path,
+// because the happy path is one line and the guardrails are the whole design.
+console.log('\n--- order deletion is fenced off from voiding ---');
+
+t('delete has its own permission, not the void one',
+  /router\.delete\([\s\S]{0,120}requirePermission\(PERMISSIONS\.ORDER_DELETE\)/.test(routes));
+t('ORDER_DELETE is never granted to a cashier',
+  !/CASHIER_PERMISSIONS[\s\S]*?P\.ORDER_DELETE[\s\S]*?\];/.test(
+    fs.readFileSync(path.join(ROOT, 'src/constants/permissions.js'), 'utf8'),
+  ));
+
+const delBody = ctl.slice(ctl.indexOf('export const deleteOrder'));
+t('a written reason is required, and a long one',
+  /min\(10,/.test(fs.readFileSync(path.join(ROOT, 'src/validators/orders.js'), 'utf8')));
+t('the snapshot is taken before anything is destroyed',
+  delBody.indexOf('const snapshot') < delBody.indexOf('deleteOne'));
+t('the snapshot carries the line items, not just a total',
+  /items: order\.items\.map/.test(delBody));
+t('the ticket is removed in the same transaction',
+  /withTransaction[\s\S]{0,400}Ticket\.deleteMany/.test(delBody));
+t('the table is freed only if it still points at this order',
+  /currentOrder: order\._id[\s\S]{0,200}TABLE_STATUS\.AVAILABLE/.test(delBody));
+t('the audit entry is written after the commit, not before',
+  delBody.indexOf('withTransaction') < delBody.indexOf('AUDIT_ACTION.ORDER_DELETE'));
+t('the deletion is logged at warn level for alerting',
+  /logger\.warn\('Order permanently deleted'/.test(delBody));
+t('deleteOne on an order appears only inside deleteOrder',
+  (ctl.match(/Order\.deleteOne/g) ?? []).length === 1);
 
 console.log('\n--- the override credential cannot log anyone in ---');
 const user = fs.readFileSync(path.join(ROOT, 'src/models/User.js'), 'utf8');

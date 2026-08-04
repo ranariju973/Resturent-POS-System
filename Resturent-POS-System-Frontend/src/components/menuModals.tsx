@@ -172,7 +172,7 @@ export function ItemModal() {
           style={{ ...bareInput, appearance: 'none' }}
         >
           {state.cats.map((c) => (
-            <option key={c.name} value={c.name}>
+            <option key={c.id} value={c.id}>
               {c.name}
             </option>
           ))}

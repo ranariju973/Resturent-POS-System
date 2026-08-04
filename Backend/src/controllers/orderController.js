@@ -23,7 +23,7 @@ import { Order } from '../models/Order.js';
 import { Ticket } from '../models/Ticket.js';
 import { Table } from '../models/Table.js';
 import { MenuItem } from '../models/MenuItem.js';
-import { Customer } from '../models/Customer.js';
+import { Customer, normalizePhone } from '../models/Customer.js';
 import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { nextSequence } from '../models/Counter.js';
@@ -167,6 +167,72 @@ async function priceLines(requested, session) {
   return lines;
 }
 
+/**
+ * Find or create the customer captured at the till, keyed by phone.
+ *
+ * ── Why the phone and not the name ─────────────────────────────────────────
+ * Names collide and get typed differently every visit; a phone number is the
+ * one field a customer will give identically each time, and the model already
+ * enforces uniqueness on its normalised form. So the number decides identity
+ * and the name is just a label hanging off it.
+ *
+ * ── Why an existing name is never overwritten ──────────────────────────────
+ * If the number is known, whatever the cashier typed in the name box is
+ * ignored. A busy till produces typos, and a typo must not be allowed to
+ * rename a regular — worse, to rename them differently at each terminal. Names
+ * are corrected deliberately, on the Customers screen.
+ *
+ * ── Why an unknown number with no name is refused ──────────────────────────
+ * The alternative is filing them as "Guest", and a customer list that is
+ * mostly Guests is not a customer list. Four characters at the till is the
+ * cheaper cost.
+ *
+ * @returns {Promise<import('mongoose').Types.ObjectId|null>}
+ */
+async function resolveInlineCustomer(inline, req, session) {
+  if (!inline) return null;
+
+  const digits = normalizePhone(inline.phone);
+  const name = inline.name?.trim();
+
+  // Soft-deleted records are matched too: a number that was removed and is now
+  // being used again should revive that customer rather than collide with the
+  // unique index it still occupies.
+  const existing = await Customer.findOne({ phoneNormalized: digits })
+    .select('+phoneNormalized name isActive')
+    .session(session ?? null);
+
+  if (existing) {
+    if (!existing.isActive) {
+      existing.isActive = true;
+      if (name) existing.name = name;
+      await existing.save({ session });
+    }
+    return existing._id;
+  }
+
+  if (!name) {
+    throw ApiError.badRequest('This number is new — please enter the customer’s name');
+  }
+
+  const created = new Customer({ name, phone: inline.phone });
+  await created.save({ session });
+
+  await AuditLog.record(
+    {
+      action: AUDIT_ACTION.CUSTOMER_CREATE,
+      resource: 'Customer',
+      resourceId: created._id,
+      // No phone or name in the meta — the logger redacts those fields, and an
+      // audit trail is not an exemption from that.
+      meta: { via: 'billing' },
+    },
+    req,
+  );
+
+  return created._id;
+}
+
 /** Human label for the kitchen board. */
 const ticketSource = (type, table) => {
   if (type === ORDER_TYPE.DINE_IN && table) return `Table ${table.name}`;
@@ -185,7 +251,7 @@ const ticketSource = (type, table) => {
  * means food goes out unbilled.
  */
 export const createOrder = asyncHandler(async (req, res) => {
-  const { type, tableId, customerId, items: requestedItems } = req.body;
+  const { type, tableId, customerId, customer: inline, items: requestedItems } = req.body;
 
   let table = null;
   if (tableId) {
@@ -208,11 +274,15 @@ export const createOrder = asyncHandler(async (req, res) => {
     const lines = await priceLines(requestedItems, session);
     const orderNo = await nextSequence('order', { session });
 
+    // Resolve the customer inside the transaction, so a record is never left
+    // behind by an order that then failed to save.
+    const resolvedCustomerId = customerId ?? (await resolveInlineCustomer(inline, req, session));
+
     const order = new Order({
       orderNo,
       type,
       table: table?._id ?? null,
-      customer: customerId ?? null,
+      customer: resolvedCustomerId ?? null,
       items: lines,
       taxRate: DEFAULT_TAX_RATE,
       status: ORDER_STATUS.OPEN,
@@ -487,10 +557,9 @@ export const payOrder = asyncHandler(async (req, res) => {
   // Denormalised counters — outside the transaction because a failure here
   // must not undo a completed payment.
   if (order.customer) {
-    await Customer.updateOne(
-      { _id: order.customer },
-      { $set: { lastVisitAt: new Date() }, $inc: { visitCount: 1 } },
-    ).catch((err) => logger.warn('Failed to update customer visit counters', { message: err.message }));
+    await Customer.recordVisit(order.customer).catch((err) =>
+      logger.warn('Failed to update customer visit counters', { message: err.message }),
+    );
   }
 
   await AuditLog.record(
@@ -590,6 +659,109 @@ export const voidOrder = asyncHandler(async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// DELETE /api/orders/:id
+// ---------------------------------------------------------------------------
+/**
+ * Permanently remove an order. Admin only.
+ *
+ * ── Read this before changing it ───────────────────────────────────────────
+ * This is the most destructive operation in the system, and unlike the menu
+ * purge there is no safe subset it can be restricted to: every order has
+ * already affected a report, a shift total, or a customer's history. Deleting
+ * a paid order means the day's takings no longer reconcile against the cash in
+ * the drawer, and nothing in the data will explain the gap.
+ *
+ * It exists because an operator asked for it. What follows is the set of
+ * guardrails that make it defensible rather than reckless:
+ *
+ *   1. `order:delete` is admin-only and is deliberately NOT the same
+ *      permission as voiding. A cashier who could delete their own orders
+ *      could take cash and leave nothing behind to notice.
+ *   2. A written reason of at least ten characters is required. "test" does
+ *      not survive the validator.
+ *   3. The audit entry carries a FULL snapshot — order number, every line,
+ *      totals, tender, who rang it up. Once the row is gone that entry is the
+ *      only record the sale ever existed, so it has to be self-contained.
+ *   4. It is logged at warn level so it shows up in log-based alerting rather
+ *      than only in a table nobody reads.
+ *
+ * Voiding remains the correct operation for ordinary mistakes.
+ */
+export const deleteOrder = asyncHandler(async (req, res) => {
+  const { reason } = req.body;
+
+  const order = await Order.findById(req.params.id);
+  if (!order) throw ApiError.notFound('Order not found');
+
+  // Built before anything is destroyed, and deliberately complete: a partial
+  // snapshot is worse than none, because it looks like a record.
+  const snapshot = {
+    orderNo: order.orderNo,
+    type: order.type,
+    status: order.status,
+    table: order.table ? String(order.table) : null,
+    customer: order.customer ? String(order.customer) : null,
+    items: order.items.map((line) => ({
+      name: line.nameSnapshot,
+      qty: line.qty,
+      unitPriceMinor: line.priceMinorAtSale,
+      note: line.note,
+    })),
+    subtotalMinor: order.subtotalMinor,
+    discountMinor: order.discountMinor,
+    taxMinor: order.taxMinor,
+    totalMinor: order.totalMinor,
+    paymentMethod: order.paymentMethod,
+    paidAt: order.paidAt,
+    createdBy: String(order.createdBy),
+    createdAt: order.createdAt,
+  };
+
+  await withTransaction(async (session) => {
+    // The ticket references the order, so it has to go in the same breath.
+    // Left behind it would be a board entry whose populate() resolves to null
+    // — which renders as a blank card the kitchen cannot clear.
+    await Ticket.deleteMany({ order: order._id }, { session });
+
+    // Free the table only if it still points at THIS order. An unconditional
+    // clear would release a table that has since been seated by someone else.
+    if (order.table) {
+      await Table.updateOne(
+        { _id: order.table, currentOrder: order._id },
+        { $set: { currentOrder: null, status: TABLE_STATUS.AVAILABLE, occupiedAt: null } },
+        { session },
+      );
+    }
+
+    await Order.deleteOne({ _id: order._id }, { session });
+  });
+
+  emitEvent(EVENTS.ORDER_VOIDED, { orderId: String(order._id), orderNo: order.orderNo });
+
+  // Written after the commit: an audit line for a delete that rolled back
+  // would be a false record of a sale being destroyed.
+  await AuditLog.record(
+    {
+      action: AUDIT_ACTION.ORDER_DELETE,
+      resource: 'Order',
+      resourceId: order._id,
+      meta: { reason, ...snapshot },
+    },
+    req,
+  );
+
+  logger.warn('Order permanently deleted', {
+    orderNo: snapshot.orderNo,
+    totalMinor: snapshot.totalMinor,
+    status: snapshot.status,
+    by: req.user.id,
+    reason,
+  });
+
+  return sendSuccess(res, { deleted: true, id: String(order._id), orderNo: snapshot.orderNo });
+});
+
+// ---------------------------------------------------------------------------
 // Manager override
 // ---------------------------------------------------------------------------
 /**
@@ -637,4 +809,5 @@ export default {
   applyDiscount,
   payOrder,
   voidOrder,
+  deleteOrder,
 };

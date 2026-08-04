@@ -1,4 +1,4 @@
-# Verdant Café — Point of Sale
+# Kimche Restora — Point of Sale
 
 React implementation of the `POS App.dc.html` design exported from Claude Design.
 Eight screens behind a shared app shell.

@@ -127,6 +127,10 @@ export const AUDIT_ACTION = Object.freeze({
   MENU_ITEM_UPDATE: 'menu.item.update',
   MENU_ITEM_PRICE_CHANGE: 'menu.item.price.change',
   MENU_ITEM_DELETE: 'menu.item.delete',
+  // Irreversible removal of the row itself, only ever possible for an item
+  // that never appeared on an order. Recorded separately from the soft delete
+  // because the audit entry is the only trace left once the row is gone.
+  MENU_ITEM_PURGE: 'menu.item.purge',
   MENU_STOCK_TOGGLE: 'menu.item.stock.toggle',
 
   TABLE_CREATE: 'table.create',
@@ -136,6 +140,10 @@ export const AUDIT_ACTION = Object.freeze({
   ORDER_CREATE: 'order.create',
   ORDER_PAY: 'order.pay',
   ORDER_VOID: 'order.void',
+  // Irreversible. Once the order row is gone this entry is the only surviving
+  // evidence that the sale happened, so it carries a full snapshot rather than
+  // an id that resolves to nothing.
+  ORDER_DELETE: 'order.delete',
   ORDER_DISCOUNT_APPLIED: 'order.discount.applied',
   ORDER_DISCOUNT_OVERRIDE: 'order.discount.override',
 

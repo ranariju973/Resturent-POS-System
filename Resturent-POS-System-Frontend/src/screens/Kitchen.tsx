@@ -1,9 +1,11 @@
+import { useEffect } from 'react';
 import { Icon } from '../icons/Icon';
 import { KDS_COLS } from '../data/seed';
 import type { Ticket } from '../data/types';
 import { usePos } from '../store';
 import { duration, minutesSince } from '../lib/format';
-import { CARD_SHADOW, FilterPill, PageHeading } from '../components/ui';
+import { CARD_SHADOW, FilterPill, LoadState, PageHeading } from '../components/ui';
+import { openBoardStream } from '../lib/kitchenApi';
 
 const TYPES = ['All', 'Dine-in', 'Takeaway', 'Delivery'];
 
@@ -42,6 +44,38 @@ export function Kitchen() {
   const late = state.tickets.filter(
     (t) => t.status !== 'served' && minutesSince(t.placedAt) > OVERDUE_AT,
   ).length;
+
+  /**
+   * Subscribe to the live board while this screen is mounted.
+   *
+   * Any event refetches rather than patching from the event payload: the board
+   * is small, and a missed or out-of-order event would otherwise leave a
+   * ticket sitting in a column the kitchen has already moved it out of.
+   *
+   * `cancelled` guards the gap between opening the stream and the token
+   * arriving — without it, unmounting mid-handshake leaks an EventSource that
+   * keeps reconnecting after the screen is gone.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    let close: (() => void) | undefined;
+
+    void openBoardStream(() => void actions.loadBoard())
+      .then((stop) => {
+        if (cancelled) stop();
+        else close = stop;
+      })
+      .catch(() => {
+        // No stream (older proxy, blocked SSE) is not fatal — the board still
+        // loads on mount, it just will not update on its own.
+      });
+
+    return () => {
+      cancelled = true;
+      close?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <main
@@ -117,6 +151,12 @@ export function Kitchen() {
           </button>
         ) : null}
       </div>
+
+      <LoadState
+        loading={state.kdsLoading && state.tickets.length === 0}
+        error={state.kdsError}
+        onRetry={() => void actions.loadBoard()}
+      />
 
       <div
         style={{
@@ -293,11 +333,11 @@ export function Kitchen() {
                           background: '#f9f9f9',
                         }}
                       >
-                        {ticket.order.map(([id, qty]) => {
-                          const item = state.items.find((x) => x.id === id);
+                        {ticket.items.map((line, index) => {
+                          const qty = line.qty;
                           return (
                             <span
-                              key={id}
+                              key={`${line.name}-${index}`}
                               style={{
                                 display: 'flex',
                                 alignItems: 'baseline',
@@ -307,7 +347,7 @@ export function Kitchen() {
                               }}
                             >
                               <span style={{ fontWeight: 600, color: 'rgba(0,0,0,0.87)' }}>
-                                {item ? item.name : id}
+                                {line.name}
                               </span>
                               <span
                                 style={{

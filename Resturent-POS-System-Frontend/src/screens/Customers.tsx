@@ -1,5 +1,7 @@
+import { useEffect } from 'react';
 import { Icon } from '../icons/Icon';
 import { usePos } from '../store';
+import { PERMISSIONS, can } from '../lib/permissions';
 import { money, plural } from '../lib/format';
 import { STATUS_BADGE, orderCount, orderValue, resolveOrder } from '../lib/orders';
 import {
@@ -18,6 +20,12 @@ import {
 
 export function Customers() {
   const { state, actions } = usePos();
+  const mayDelete = can(state.user?.permissions, PERMISSIONS.CUSTOMER_DELETE);
+
+  useEffect(() => {
+    void actions.loadCustomers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const query = state.custQuery.trim().toLowerCase();
   const list = state.customers.filter(
@@ -62,21 +70,6 @@ export function Customers() {
               padding: 16,
             }}
           >
-            <button
-              type="button"
-              className="press hv-primary"
-              onClick={() => actions.openCustModal(null)}
-              style={{
-                ...primaryPill,
-                width: '100%',
-                justifyContent: 'center',
-                padding: '11px 18px',
-              }}
-            >
-              <Icon icon="lucide:plus" />
-              Add Customer
-            </button>
-
             <SearchInput
               placeholder="Search name or phone"
               value={state.custQuery}
@@ -211,6 +204,24 @@ export function Customers() {
                         size={30}
                         onClick={() => actions.openCustModal(selected)}
                       />
+                      {/*
+                        Admin only. The screen hides it and the route refuses
+                        it — the second of those is what actually enforces it.
+                      */}
+                      {mayDelete ? (
+                        <IconButton
+                          icon="lucide:trash-2"
+                          title="Remove customer"
+                          iconSize={14}
+                          size={30}
+                          onClick={() => {
+                            const ok = window.confirm(
+                              `Remove ${selected.name}? Their order history stays on the orders themselves.`,
+                            );
+                            if (ok) void actions.deleteCustomer(selected.id);
+                          }}
+                        />
+                      ) : null}
                     </span>
                     <span style={{ fontSize: 14, fontWeight: 600, color: 'rgba(0,0,0,0.58)' }}>
                       {selected.phone}
@@ -563,7 +574,7 @@ function CustomerModal() {
   return (
     <ModalOverlay maxWidth={440} scroll>
       <ModalTitle>
-        {state.modal.mode === 'edit' ? 'Edit customer' : 'Add customer'}
+        Edit customer
       </ModalTitle>
 
       <Field label="Name" htmlFor="cname">

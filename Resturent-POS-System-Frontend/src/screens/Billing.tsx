@@ -1,8 +1,28 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../icons/Icon';
-import { CONFIG, usePos } from '../store';
+import { CONFIG, SHOW_ALL, usePos } from '../store';
+import type { OrderType } from '../data/types';
 import { CURRENCY, money, plural } from '../lib/format';
-import { CARD_SHADOW, FilterPill, PageHeading, SearchInput } from '../components/ui';
+import { CARD_SHADOW, FilterPill, LoadState, PageHeading, SearchInput } from '../components/ui';
+
+/** Shared styling for the two customer inputs. */
+const customerInput: CSSProperties = {
+  width: '100%',
+  marginTop: 3,
+  border: 0,
+  padding: 0,
+  fontSize: 15,
+  fontWeight: 600,
+  color: 'rgba(0,0,0,0.87)',
+  background: 'transparent',
+  outline: 'none',
+};
+
+const ORDER_TYPES: { id: OrderType; label: string }[] = [
+  { id: 'dine-in', label: 'Dine-in' },
+  { id: 'takeaway', label: 'Takeaway' },
+  { id: 'delivery', label: 'Delivery' },
+];
 
 export function Billing() {
   const { state, actions } = usePos();
@@ -13,7 +33,7 @@ export function Billing() {
   const products = state.items.filter(
     (p) =>
       p.available &&
-      (state.cat === 'Show All' || p.cat === state.cat) &&
+      (state.cat === SHOW_ALL || p.cat === state.cat) &&
       (!query || p.name.toLowerCase().includes(query)),
   );
 
@@ -22,16 +42,48 @@ export function Billing() {
     return item ? [{ line, item, lineTotal: item.price * line.qty }] : [];
   });
 
-  const subtotal = lines.reduce((sum, l) => sum + l.lineTotal, 0);
+  const open = state.activeOrder;
+
+  // Before the bill is opened these are a local estimate so the cashier can see
+  // the effect of a discount. Once it exists, every figure is the server's —
+  // its rounding is the one that ends up on the receipt.
+  const draftSubtotal = lines.reduce((sum, l) => sum + l.lineTotal, 0);
   const rawDiscount = parseFloat(state.discountValue) || 0;
-  const discount = Math.min(
-    state.discountMode === 'pct' ? (subtotal * rawDiscount) / 100 : rawDiscount,
-    subtotal,
+  const draftDiscount = Math.min(
+    state.discountMode === 'pct' ? (draftSubtotal * rawDiscount) / 100 : rawDiscount,
+    draftSubtotal,
   );
+
+  const subtotal = open ? open.subtotal : draftSubtotal;
+  const discount = open ? open.discount : draftDiscount;
+  const total = open ? open.total : Math.max(draftSubtotal - draftDiscount, 0);
+
   const count = lines.reduce((sum, l) => sum + l.line.qty, 0);
-  const hasName = state.customer.trim().length > 0;
-  const nameMissing = CONFIG.requireCustomerName && !hasName;
-  const canGenerate = count > 0 && !nameMissing;
+
+  // The phone is what identifies the customer, so it is the required field.
+  // The name is only required when the number is one we have never seen — for
+  // a returning customer the server already holds it and ignores what we send.
+  const phoneDigits = state.customerPhone.replace(/\D/g, '');
+  const phoneMissing = phoneDigits.length < 6;
+  const nameMissing = !state.customerKnown && state.customer.trim().length < 2;
+
+  // Dine-in without a table is refused by the server, so the button must not
+  // pretend otherwise.
+  const tableMissing = state.orderType === 'dine-in' && !state.orderTable;
+
+  const blocker =
+    count === 0
+      ? 'Add an item to bill'
+      : phoneMissing
+        ? 'Enter a phone number'
+        : nameMissing
+          ? 'Enter the customer name'
+          : tableMissing
+            ? 'Pick a table for dine-in'
+            : null;
+
+  const canGenerate = !blocker && !state.checkoutPending;
+  const tableName = state.tables.find((t) => t.id === state.orderTable)?.name ?? '';
 
   return (
     <main style={{ flex: 1, minHeight: 0, display: 'flex', gap: 24, padding: 24 }}>
@@ -66,12 +118,12 @@ export function Billing() {
           />
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {['Show All', ...state.cats.map((c) => c.name)].map((name) => (
+            {[{ id: SHOW_ALL, name: 'Show All' }, ...state.cats].map((c) => (
               <FilterPill
-                key={name}
-                label={name}
-                active={name === state.cat}
-                onClick={() => actions.patch({ cat: name })}
+                key={c.id}
+                label={c.name}
+                active={c.id === state.cat}
+                onClick={() => actions.patch({ cat: c.id })}
               />
             ))}
           </div>
@@ -144,7 +196,7 @@ export function Billing() {
                         {money(p.price)}
                       </span>
                       <span style={{ fontSize: 11, fontWeight: 500, color: 'rgba(0,0,0,0.45)' }}>
-                        {p.cat}
+                        {p.catName}
                       </span>
                     </span>
                   </span>
@@ -177,20 +229,17 @@ export function Billing() {
             })}
           </div>
 
-          {products.length === 0 ? (
-            <p
-              style={{
-                margin: 0,
-                padding: '8px 0 4px',
-                textAlign: 'center',
-                fontSize: 14,
-                fontWeight: 500,
-                color: 'rgba(0,0,0,0.58)',
-              }}
-            >
-              No items match that search.
-            </p>
-          ) : null}
+          <LoadState
+            loading={state.menuLoading}
+            error={state.menuError}
+            empty={!state.menuLoading && !state.menuError && products.length === 0}
+            emptyMessage={
+              state.items.length === 0
+                ? 'No menu items yet. Add them under Menu Management.'
+                : 'No items match that search.'
+            }
+            onRetry={() => void actions.loadMenu()}
+          />
         </div>
       </section>
 
@@ -215,44 +264,118 @@ export function Billing() {
             borderBottom: '1px solid #edebe9',
           }}
         >
+          {/*
+            Order type first. It decides whether a table is asked for at all,
+            and the server enforces the same pairing — dine-in requires a
+            table, takeaway and delivery refuse one — so this is the control
+            that makes the screen agree with the rules underneath it.
+          */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {ORDER_TYPES.map((type) => (
+              <FilterPill
+                key={type.id}
+                label={type.label}
+                active={state.orderType === type.id}
+                onClick={() => actions.setOrderType(type.id)}
+              />
+            ))}
+          </div>
+
+          {/*
+            Phone before name, because the phone IS the identity: it is what
+            the lookup matches and what the server keys the record by. A name
+            typed first would just be discarded the moment the number resolves.
+          */}
           <div
             style={{
-              border: `1px solid ${nameMissing ? '#cba258' : '#d6dbde'}`,
+              border: `1px solid ${phoneMissing ? '#cba258' : '#d6dbde'}`,
               borderRadius: 12,
               padding: '8px 14px 10px',
               background: '#ffffff',
             }}
           >
             <label
-              htmlFor="cust"
+              htmlFor="custphone"
               style={{
-                display: 'block',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
                 fontSize: 11,
                 fontWeight: 700,
                 textTransform: 'uppercase',
                 letterSpacing: '0.04em',
-                color: nameMissing ? '#8a6a24' : 'rgba(0,0,0,0.58)',
+                color: phoneMissing ? '#8a6a24' : 'rgba(0,0,0,0.58)',
               }}
             >
-              Customer name {nameMissing ? '· required' : ''}
+              Phone number {phoneMissing ? '· required' : ''}
+              {state.customerLookupPending ? (
+                <span style={{ fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>
+                  checking…
+                </span>
+              ) : null}
+            </label>
+            <input
+              id="custphone"
+              type="tel"
+              inputMode="tel"
+              autoComplete="off"
+              placeholder="e.g. 98200 41122"
+              value={state.customerPhone}
+              onChange={(e) => actions.setCustomerPhone(e.target.value)}
+              style={customerInput}
+            />
+          </div>
+
+          <div
+            style={{
+              border: '1px solid #d6dbde',
+              borderRadius: 12,
+              padding: '8px 14px 10px',
+              background: state.customerKnown ? '#f7faf9' : '#ffffff',
+            }}
+          >
+            <label
+              htmlFor="cust"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                color: 'rgba(0,0,0,0.58)',
+              }}
+            >
+              Customer name
+              {/*
+                Say where the name came from. Without this the cashier cannot
+                tell an auto-filled regular from something they typed, and a
+                wrong name would go unnoticed onto the bill.
+              */}
+              {state.customerKnown ? (
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    color: '#00754A',
+                    textTransform: 'none',
+                    letterSpacing: 0,
+                  }}
+                >
+                  <Icon icon="lucide:user-check" size={12} />
+                  Returning customer
+                </span>
+              ) : null}
             </label>
             <input
               id="cust"
               type="text"
-              placeholder="e.g. Aarav Mehta"
+              placeholder={state.customerPhone ? 'e.g. Aarav Mehta' : 'Enter the phone number first'}
               value={state.customer}
-              onChange={(e) => actions.patch({ customer: e.target.value })}
-              style={{
-                width: '100%',
-                marginTop: 3,
-                border: 0,
-                padding: 0,
-                fontSize: 15,
-                fontWeight: 600,
-                color: 'rgba(0,0,0,0.87)',
-                background: 'transparent',
-                outline: 'none',
-              }}
+              onChange={(e) => actions.setCustomerName(e.target.value)}
+              style={customerInput}
             />
           </div>
 
@@ -260,7 +383,7 @@ export function Billing() {
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Icon icon="lucide:receipt" size={17} color="#00754A" />
               <span style={{ fontSize: 16, fontWeight: 700, color: 'rgba(0,0,0,0.87)' }}>
-                Order #{CONFIG.orderNumber}
+                Order #{open ? open.orderNo : '\u2014'}
               </span>
             </span>
             <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(0,0,0,0.58)' }}>
@@ -268,7 +391,7 @@ export function Billing() {
             </span>
           </div>
 
-          {state.orderTable ? (
+          {state.orderType === 'dine-in' && state.orderTable ? (
             <button
               type="button"
               className="press"
@@ -289,7 +412,7 @@ export function Billing() {
               }}
             >
               <Icon icon="lucide:utensils" size={13} />
-              Table {state.orderTable}
+              Table {tableName}
               <Icon icon="lucide:x" size={13} color="#00754A" />
             </button>
           ) : null}
@@ -622,27 +745,85 @@ export function Billing() {
                 Total
               </span>
               <span style={{ fontSize: 24, fontWeight: 800, color: '#00754A', lineHeight: 1.1 }}>
-                {money(Math.max(subtotal - discount, 0))}
+                {money(total)}
               </span>
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {canGenerate ? (
+            {open ? (
+              /*
+               * The bill exists on the server and the kitchen already has the
+               * ticket. The only thing left is which tender settles it — the
+               * pay endpoint requires a method, so there is no "just close it"
+               * path that leaves the till unreconciled.
+               */
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                    color: 'rgba(0,0,0,0.45)',
+                  }}
+                >
+                  Take payment
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {(['cash', 'card', 'upi'] as const).map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      className="press hv-primary"
+                      disabled={state.checkoutPending}
+                      onClick={() => void actions.payBill(method)}
+                      style={{
+                        ...generateButton,
+                        flex: 1,
+                        textTransform: 'capitalize',
+                        opacity: state.checkoutPending ? 0.6 : 1,
+                      }}
+                    >
+                      {method}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="press"
+                  disabled={state.checkoutPending}
+                  onClick={() => {
+                    const reason = window.prompt('Why is this bill being voided?')?.trim();
+                    // The server demands at least three characters, so an empty
+                    // or cancelled prompt must not be sent as a void.
+                    if (reason && reason.length >= 3) void actions.voidBill(reason);
+                  }}
+                  style={{
+                    ...outlineGreenButton,
+                    borderColor: '#c82014',
+                    color: '#c82014',
+                  }}
+                >
+                  <Icon icon="lucide:ban" size={15} />
+                  Void bill
+                </button>
+              </div>
+            ) : canGenerate ? (
               <button
                 type="button"
                 className="press hv-primary"
-                onClick={() => actions.flash(`Bill generated for ${state.customer.trim()}`)}
+                onClick={() => void actions.generateBill()}
                 style={generateButton}
               >
                 <Icon icon="lucide:file-check-2" size={17} />
-                Generate Bill
+                {state.checkoutPending ? 'Opening…' : 'Generate Bill'}
               </button>
             ) : (
               <button
                 type="button"
                 disabled
-                title={count === 0 ? 'Add an item to bill' : 'Enter customer name'}
+                title={blocker ?? ''}
                 style={{
                   ...generateButton,
                   border: '1px solid #edebe9',
@@ -652,7 +833,7 @@ export function Billing() {
                 }}
               >
                 <Icon icon="lucide:lock" size={16} />
-                {count === 0 ? 'Add an item to bill' : 'Enter customer name'}
+                {blocker}
               </button>
             )}
 

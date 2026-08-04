@@ -206,6 +206,90 @@ export function Toggle({ on }: { on: boolean }) {
   );
 }
 
+/**
+ * First-load and failure state for a screen backed by the API.
+ *
+ * Renders nothing once data has arrived, so a screen can drop it in above its
+ * content without branching. The distinction that matters is between "still
+ * loading" and "loaded and genuinely empty" — showing "No items" while a
+ * request is still in flight reads as a broken menu, and a cashier will go
+ * looking for a problem that does not exist.
+ */
+export function LoadState({
+  loading,
+  error,
+  empty,
+  emptyMessage,
+  onRetry,
+}: {
+  loading: boolean;
+  error: string;
+  empty?: boolean;
+  emptyMessage?: string;
+  onRetry?: () => void;
+}) {
+  if (loading) {
+    return (
+      <p style={noticeStyle}>
+        <span
+          aria-hidden
+          style={{
+            width: 15,
+            height: 15,
+            borderRadius: '50%',
+            border: '2px solid rgba(0,117,74,0.18)',
+            borderTopColor: '#00754A',
+            animation: 'spin 0.7s linear infinite',
+          }}
+        />
+        Loading…
+      </p>
+    );
+  }
+
+  if (error) {
+    return (
+      <p style={{ ...noticeStyle, color: '#c82014' }}>
+        {error}
+        {onRetry ? (
+          <button
+            type="button"
+            className="press"
+            onClick={onRetry}
+            style={{
+              padding: '5px 14px',
+              borderRadius: 50,
+              border: '1px solid #c82014',
+              background: 'transparent',
+              color: '#c82014',
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            Try again
+          </button>
+        ) : null}
+      </p>
+    );
+  }
+
+  if (empty) return <p style={noticeStyle}>{emptyMessage ?? 'Nothing here yet.'}</p>;
+
+  return null;
+}
+
+const noticeStyle: CSSProperties = {
+  margin: 0,
+  padding: '18px 0',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 10,
+  fontSize: 14,
+  fontWeight: 500,
+  color: 'rgba(0,0,0,0.58)',
+};
+
 export function ErrorLine({ message }: { message: string }) {
   return (
     <span

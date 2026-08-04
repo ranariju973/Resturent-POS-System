@@ -1,4 +1,4 @@
-# Verdant Café POS — Backend
+# Kimche Restora POS — Backend
 
 Node.js + Express + MongoDB + Cloudinary API for the restaurant POS.
 Build plan and RBAC matrix: [`BACKEND-BUILD-PLAN.md`](./BACKEND-BUILD-PLAN.md).

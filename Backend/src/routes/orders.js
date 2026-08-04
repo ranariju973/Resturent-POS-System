@@ -20,6 +20,7 @@ import {
   discountSchema,
   paySchema,
   voidSchema,
+  deleteOrderSchema,
   listOrdersSchema,
   idParamSchema,
 } from '../validators/orders.js';
@@ -31,6 +32,7 @@ import {
   applyDiscount,
   payOrder,
   voidOrder,
+  deleteOrder,
 } from '../controllers/orderController.js';
 
 const router = Router();
@@ -91,6 +93,21 @@ router.post(
   requirePermission(PERMISSIONS.POS_CREATE_ORDER),
   validate({ params: idParamSchema, body: voidSchema }),
   voidOrder,
+);
+
+/**
+ * Permanent deletion — admin only, via its own permission.
+ *
+ * Deliberately NOT gated on `pos:void_order`. Voiding and deleting are
+ * different powers: the first is ordinary service recovery, the second
+ * destroys the record of a sale. Sharing a permission between them would hand
+ * the destructive one to everyone who legitimately needs the ordinary one.
+ */
+router.delete(
+  '/:id',
+  requirePermission(PERMISSIONS.ORDER_DELETE),
+  validate({ params: idParamSchema, body: deleteOrderSchema }),
+  deleteOrder,
 );
 
 export default router;

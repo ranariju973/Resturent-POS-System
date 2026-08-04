@@ -23,6 +23,8 @@ export const PERMISSIONS = {
   POS_APPLY_DISCOUNT: 'pos:apply_discount',
   POS_VOID_ORDER: 'pos:void_order',
   POS_OVERRIDE: 'pos:override',
+  /** Permanent deletion of an order. Admin only — see the backend catalogue. */
+  ORDER_DELETE: 'order:delete',
 
   MENU_VIEW: 'menu:view',
   MENU_CREATE: 'menu:create',

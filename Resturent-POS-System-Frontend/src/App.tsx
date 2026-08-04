@@ -48,6 +48,24 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Load server-owned collections once a session exists.
+   *
+   * Keyed on the user id rather than a boolean so switching terminals between
+   * staff — a PIN logout and a different PIN in — refetches rather than
+   * leaving the previous cashier's view on screen. Each loader is permission-
+   * aware by way of the API: a kitchen staffer's menu request simply 403s and
+   * lands in that screen's error state, which is the correct outcome.
+   */
+  const userId = state.user?.id ?? null;
+  useEffect(() => {
+    if (!userId) return;
+    void actions.loadMenu();
+    void actions.loadTables();
+    void actions.loadBoard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
   return (
     <div style={{ height: '100vh', minHeight: 680, background: '#f2f0eb', overflow: 'hidden' }}>
       {state.authBooting ? (

@@ -15,6 +15,7 @@
  */
 import { MenuItem } from '../models/MenuItem.js';
 import { Category } from '../models/Category.js';
+import { Order } from '../models/Order.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { AUDIT_ACTION } from '../constants/enums.js';
 import { PERMISSIONS } from '../constants/permissions.js';
@@ -308,4 +309,76 @@ export const deleteItem = asyncHandler(async (req, res) => {
   return sendSuccess(res, { deleted: true, id: String(item._id) });
 });
 
-export default { listItems, getItem, createItem, updateItem, setAvailability, deleteItem };
+// ---------------------------------------------------------------------------
+// DELETE /api/menu/items/:id/purge
+// ---------------------------------------------------------------------------
+/**
+ * Irreversibly remove a menu item.
+ *
+ * ── Why this can exist at all ──────────────────────────────────────────────
+ * The ordinary delete is soft because orders reference menu items and history
+ * has to keep resolving. That reasoning only holds for items that HAVE
+ * history. An item added by mistake at 9am and removed at 9:01, never ordered,
+ * is referenced by nothing — keeping its row forever is hoarding, not
+ * integrity.
+ *
+ * So the safety property is not "admins are careful". It is that the server
+ * refuses when a single order line points at this item. The check is the
+ * feature; the deletion is the easy part.
+ *
+ * ── Why the check is a query and not a flag ────────────────────────────────
+ * A cached "wasOrdered" boolean on the item would be one more thing that can
+ * drift out of step with the orders collection, and the direction it drifts in
+ * is the dangerous one: stale `false` means purging an item that a receipt
+ * still needs. Asking the orders collection costs one indexed lookup and
+ * cannot be wrong.
+ */
+export const purgeItem = asyncHandler(async (req, res) => {
+  // Soft-deleted items are the usual subject here, so this deliberately does
+  // not filter on isActive the way deleteItem does.
+  const item = await MenuItem.findById(req.params.id).select('+imagePublicId');
+  if (!item) throw ApiError.notFound('Menu item not found');
+
+  const onAnOrder = await Order.exists({ 'items.menuItem': item._id });
+  if (onAnOrder) {
+    throw ApiError.conflict(
+      'This item appears on past orders and cannot be permanently deleted. ' +
+        'It has been kept so receipts and reports still resolve.',
+    );
+  }
+
+  const publicId = item.imagePublicId;
+  const snapshot = { name: item.name, priceMinor: item.priceMinor, category: item.category };
+
+  // Order matters: drop the row first, then the asset. A failed Cloudinary
+  // call after the row is gone leaks one image, which is recoverable. A
+  // deleted asset followed by a failed row delete leaves a live menu item
+  // with a broken picture, which is not.
+  await MenuItem.deleteOne({ _id: item._id });
+  if (publicId) await discardUpload(publicId, req, 'item-purged');
+
+  // Written after the fact deliberately: once the row is gone this entry is
+  // the only record that the item ever existed, so it carries a snapshot
+  // rather than just an id that now resolves to nothing.
+  await AuditLog.record(
+    {
+      action: AUDIT_ACTION.MENU_ITEM_PURGE,
+      resource: 'MenuItem',
+      resourceId: item._id,
+      meta: snapshot,
+    },
+    req,
+  );
+
+  return sendSuccess(res, { purged: true, id: String(item._id) });
+});
+
+export default {
+  listItems,
+  getItem,
+  createItem,
+  updateItem,
+  setAvailability,
+  deleteItem,
+  purgeItem,
+};

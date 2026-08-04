@@ -1,16 +1,6 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../icons/Icon';
-import {
-  DAY_ORDERS,
-  EXP_CATS,
-  HOURLY,
-  MONTH_DAYS,
-  MONTH_ORDERS,
-  PAYMENTS,
-  PREV_MONTH_EXPENSES,
-  PREV_MONTH_SALES,
-  TOP_ITEMS,
-} from '../data/seed';
+import { EXP_CATS } from '../data/seed';
 import type { ExpenseCategory } from '../data/types';
 import { usePos } from '../store';
 import { fmtDate, money } from '../lib/format';
@@ -18,6 +8,8 @@ import {
   ErrorLine,
   Field,
   FilterPill,
+  IconButton,
+  LoadState,
   ModalActions,
   ModalOverlay,
   ModalTitle,
@@ -26,6 +18,20 @@ import {
   card,
   tableHeaderCell,
 } from '../components/ui';
+
+/** Payment method colours, keyed by what the server actually returns. */
+const PAY_COLOR: Record<string, string> = {
+  cash: '#1E3932',
+  card: '#00754A',
+  upi: '#cba258',
+  unrecorded: '#d6dbde',
+};
+
+/** 24 bars is too many to label; show every third hour. */
+const hourLabel = (hour: number) => {
+  const h = hour % 12 || 12;
+  return `${h}${hour < 12 ? 'a' : 'p'}`;
+};
 
 const TABS = [
   ['daily', 'Daily Sales'],
@@ -42,9 +48,9 @@ const TOP_GRID: CSSProperties = {
 };
 
 const EXPENSE_GRID: CSSProperties = {
-  minWidth: 620,
+  minWidth: 660,
   display: 'grid',
-  gridTemplateColumns: '130px 130px minmax(180px, 1fr) 120px',
+  gridTemplateColumns: '130px 130px minmax(180px, 1fr) 120px 40px',
   gap: 12,
 };
 
@@ -52,30 +58,44 @@ export function Reports() {
   const { state, actions } = usePos();
   const tab = state.repTab;
 
-  const dayTotal = HOURLY.reduce((sum, [, v]) => sum + v, 0);
-  const hourMax = Math.max(...HOURLY.map(([, v]) => v));
-  const monthTotal = MONTH_DAYS.reduce((sum, v) => sum + v, 0);
-  const dayMax = Math.max(...MONTH_DAYS);
-  const delta = ((monthTotal - PREV_MONTH_SALES) / PREV_MONTH_SALES) * 100;
-  const payTotal = PAYMENTS.reduce((sum, [, amt]) => sum + amt, 0);
+  // Refetch whenever the tab or the period changes. Each tab asks for exactly
+  // one report — fetching all four to render one would make every tab switch
+  // pay for numbers nobody is looking at.
+  useEffect(() => {
+    void actions.loadReport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, state.repDate, state.repMonth]);
 
+  const daily = state.daily;
+  const monthly = state.monthly;
+  const pnl = state.pnl;
+
+  // --- daily -----------------------------------------------------------------
+  const dayTotal = daily?.net ?? 0;
+  const dayOrders = daily?.orders ?? 0;
+  const hourly = daily?.hourly ?? [];
+  // Guard the divisor: an empty day is a real answer, not a reason to render
+  // NaN-height bars.
+  const hourMax = Math.max(1, ...hourly.map((h) => h.totalMinor));
+  const payTotal = (daily?.byPaymentMethod ?? []).reduce((sum, p) => sum + p.total, 0);
+  const topItems = daily?.topItems ?? [];
+
+  // --- monthly ---------------------------------------------------------------
+  const monthTotal = monthly?.net ?? 0;
+  const monthOrders = monthly?.orders ?? 0;
+  const monthDays = monthly?.daily ?? [];
+  const dayMax = Math.max(1, ...monthDays.map((d) => d.totalMinor));
+  const delta = monthly?.changePercent ?? null;
+
+  // --- expenses --------------------------------------------------------------
   const expenses = state.expenses
     .slice()
     .sort((a, b) => (state.expDesc ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date)));
-  const expTotal = expenses.reduce((sum, e) => sum + e.amt, 0);
-  const byCategory = EXP_CATS.map((cat) => ({
-    cat,
-    amt: expenses.filter((e) => e.cat === cat).reduce((sum, e) => sum + e.amt, 0),
-  })).filter((row) => row.amt > 0);
+  const expTotal = state.expenseTotal;
 
-  const net = monthTotal - expTotal;
-  const prevNet = PREV_MONTH_SALES - PREV_MONTH_EXPENSES;
-  const netDelta = ((net - prevNet) / Math.abs(prevNet)) * 100;
-
-  const topItems = TOP_ITEMS.map(([id, qty]) => {
-    const item = state.items.find((x) => x.id === id);
-    return { name: item ? item.name : id, qty, revenue: item ? item.price * qty : 0 };
-  }).sort((a, b) => b.revenue - a.revenue);
+  // --- P&L -------------------------------------------------------------------
+  const net = pnl?.profit ?? 0;
+  const margin = pnl?.marginPercent ?? null;
 
   return (
     <>
@@ -149,6 +169,12 @@ export function Reports() {
           </span>
         </div>
 
+        <LoadState
+          loading={state.repLoading}
+          error={state.repError}
+          onRetry={() => void actions.loadReport()}
+        />
+
         {tab === 'daily' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <div style={statGrid}>
@@ -165,14 +191,14 @@ export function Reports() {
                 iconBg="#f2f0eb"
                 iconColor="#1E3932"
                 label="Total Orders"
-                value={String(DAY_ORDERS)}
+                value={String(dayOrders)}
               />
               <ReportStat
                 icon="lucide:divide"
                 iconBg="#f2f0eb"
                 iconColor="#1E3932"
                 label="Average Order Value"
-                value={money(dayTotal / DAY_ORDERS)}
+                value={money(dayOrders ? dayTotal / dayOrders : 0)}
               />
             </div>
 
@@ -187,10 +213,10 @@ export function Reports() {
                   paddingBottom: 4,
                 }}
               >
-                {HOURLY.map(([label, value]) => (
+                {hourly.map(({ hour, totalMinor }) => (
                   <span
-                    key={label}
-                    title={money(value)}
+                    key={hour}
+                    title={`${hourLabel(hour)} · ${money(totalMinor / 100)}`}
                     style={{
                       flex: 1,
                       minWidth: 34,
@@ -207,14 +233,14 @@ export function Reports() {
                         width: '100%',
                         borderRadius: '8px 8px 3px 3px',
                         transition: 'height 0.2s ease',
-                        height: `${Math.round((value / hourMax) * 100)}%`,
-                        background: value === hourMax ? '#00754A' : '#a8cfc2',
+                        height: `${Math.round((totalMinor / hourMax) * 100)}%`,
+                        background: totalMinor === hourMax ? '#00754A' : '#a8cfc2',
                       }}
                     />
                     <span
                       style={{ fontSize: 11, fontWeight: 600, color: 'rgba(0,0,0,0.45)' }}
                     >
-                      {label}
+                      {hour % 3 === 0 ? hourLabel(hour) : ''}
                     </span>
                   </span>
                 ))}
@@ -291,15 +317,17 @@ export function Reports() {
                 iconBg="#f2f0eb"
                 iconColor="#1E3932"
                 label="Total Orders"
-                value={String(MONTH_ORDERS)}
+                value={String(monthOrders)}
               />
               <ReportStat
                 icon="lucide:trending-up"
-                iconBg={delta >= 0 ? '#d4e9e2' : 'rgba(200,32,20,0.10)'}
-                iconColor={delta >= 0 ? '#00754A' : '#c82014'}
+                iconBg={(delta ?? 0) >= 0 ? '#d4e9e2' : 'rgba(200,32,20,0.10)'}
+                iconColor={(delta ?? 0) >= 0 ? '#00754A' : '#c82014'}
                 label="vs. Last Month"
-                value={`${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`}
-                valueColor={delta >= 0 ? '#00754A' : '#c82014'}
+                // Null means there is no prior month to compare against, which
+                // is a different fact from 0% and must not read as "no change".
+                value={delta === null ? '—' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`}
+                valueColor={delta === null ? 'rgba(0,0,0,0.45)' : delta >= 0 ? '#00754A' : '#c82014'}
               />
             </div>
 
@@ -314,9 +342,10 @@ export function Reports() {
                   paddingBottom: 4,
                 }}
               >
-                {MONTH_DAYS.map((value, i) => (
+                {monthDays.map(({ day, totalMinor }) => (
                   <span
-                    key={i}
+                    key={day}
+                    title={money(totalMinor / 100)}
                     style={{
                       flex: 1,
                       minWidth: 18,
@@ -333,14 +362,14 @@ export function Reports() {
                         width: '100%',
                         borderRadius: '5px 5px 2px 2px',
                         transition: 'height 0.2s ease',
-                        height: `${Math.round((value / dayMax) * 100)}%`,
-                        background: value === dayMax ? '#00754A' : '#a8cfc2',
+                        height: `${Math.round((totalMinor / dayMax) * 100)}%`,
+                        background: totalMinor === dayMax ? '#00754A' : '#a8cfc2',
                       }}
                     />
                     <span
                       style={{ fontSize: 10, fontWeight: 600, color: 'rgba(0,0,0,0.32)' }}
                     >
-                      {i + 1}
+                      {day}
                     </span>
                   </span>
                 ))}
@@ -349,8 +378,11 @@ export function Reports() {
 
             <ChartSection title="Payment methods">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {PAYMENTS.map(([name, amt, color]) => {
-                  const pct = Math.round((amt / payTotal) * 100);
+                {(daily?.byPaymentMethod ?? []).map(({ method, total }) => {
+                  const name = method;
+                  const amt = total;
+                  const color = PAY_COLOR[method] ?? '#888780';
+                  const pct = payTotal ? Math.round((amt / payTotal) * 100) : 0;
                   return (
                     <div key={name} style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                       <span
@@ -496,6 +528,7 @@ export function Reports() {
                 <span style={tableHeaderCell}>Category</span>
                 <span style={tableHeaderCell}>Description</span>
                 <span style={{ ...tableHeaderCell, textAlign: 'right' }}>Amount</span>
+                <span style={tableHeaderCell} />
               </div>
               {expenses.map((expense) => (
                 <div
@@ -521,10 +554,10 @@ export function Reports() {
                       color: 'rgba(0,0,0,0.58)',
                     }}
                   >
-                    {expense.cat}
+                    {expense.category}
                   </span>
                   <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(0,0,0,0.58)' }}>
-                    {expense.desc}
+                    {expense.description}
                   </span>
                   <span
                     style={{
@@ -534,10 +567,29 @@ export function Reports() {
                       textAlign: 'right',
                     }}
                   >
-                    {money(expense.amt)}
+                    {money(expense.amount)}
                   </span>
+                  <IconButton
+                    icon="lucide:trash-2"
+                    title="Remove expense"
+                    iconSize={14}
+                    size={28}
+                    onClick={() => {
+                      const ok = window.confirm(
+                        `Remove "${expense.description}" for ${money(expense.amount)}?`,
+                      );
+                      if (ok) void actions.deleteExpense(expense.id);
+                    }}
+                  />
                 </div>
               ))}
+
+              <LoadState
+                loading={false}
+                error=""
+                empty={!state.repLoading && expenses.length === 0}
+                emptyMessage="No expenses logged yet."
+              />
             </div>
           </section>
         ) : null}
@@ -569,7 +621,7 @@ export function Reports() {
                 Total Revenue
               </span>
               <span style={{ fontSize: 22, fontWeight: 800, color: 'rgba(0,0,0,0.87)' }}>
-                {money(monthTotal)}
+                {money(pnl?.revenue.net ?? 0)}
               </span>
             </div>
 
@@ -586,12 +638,18 @@ export function Reports() {
                   Total Expenses
                 </span>
                 <span style={{ fontSize: 22, fontWeight: 800, color: 'rgba(0,0,0,0.87)' }}>
-                  {money(expTotal)}
+                  {money(pnl?.expenses.total ?? 0)}
                 </span>
               </span>
-              {byCategory.map((row) => (
+              {/*
+                Straight from the P&L payload, which includes categories at
+                zero — the expense tab's own breakdown filters those out, and
+                mixing the two would show different category lists on the two
+                tabs for the same month.
+              */}
+              {(pnl?.expenses.byCategory ?? []).map((row) => (
                 <span
-                  key={row.cat}
+                  key={row.category}
                   style={{
                     display: 'flex',
                     alignItems: 'baseline',
@@ -601,10 +659,10 @@ export function Reports() {
                   }}
                 >
                   <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(0,0,0,0.58)' }}>
-                    {row.cat}
+                    {row.category}
                   </span>
                   <span style={{ fontSize: 14, fontWeight: 600, color: 'rgba(0,0,0,0.58)' }}>
-                    {money(row.amt)}
+                    {money(row.total)}
                   </span>
                 </span>
               ))}
@@ -636,16 +694,22 @@ export function Reports() {
                   {money(Math.abs(net))}
                 </span>
               </span>
+              {/*
+                Margin rather than a change-on-previous-period figure. The P&L
+                covers an arbitrary range, so "previous period" has no fixed
+                meaning here — the server returns a margin, which does.
+              */}
               <span
                 style={{
                   alignSelf: 'flex-end',
                   fontSize: 13,
                   fontWeight: 600,
-                  color: net >= prevNet ? '#00754A' : '#c82014',
+                  color: net >= 0 ? '#00754A' : '#c82014',
                 }}
               >
-                {netDelta >= 0 ? '▲ ' : '▼ '}
-                {Math.abs(netDelta).toFixed(1)}% vs. previous period ({money(prevNet)})
+                {margin === null
+                  ? 'No revenue in this period'
+                  : `${margin.toFixed(1)}% margin on ${money(pnl?.revenue.net ?? 0)} net sales`}
               </span>
             </div>
           </section>

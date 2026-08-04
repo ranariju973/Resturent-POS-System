@@ -31,6 +31,7 @@ import {
   updateItem,
   setAvailability,
   deleteItem,
+  purgeItem,
 } from '../controllers/menuController.js';
 import {
   listCategories,
@@ -89,6 +90,18 @@ router.patch(
   requirePermission(PERMISSIONS.MENU_TOGGLE_STOCK),
   validate({ params: idParamSchema, body: availabilitySchema }),
   setAvailability,
+);
+
+/**
+ * Permanent deletion, admin-only, and refused for any item that has ever been
+ * ordered. Declared before `/items/:id` for the same reason as the toggle
+ * above: the parameterised route would otherwise swallow it.
+ */
+router.delete(
+  '/items/:id/purge',
+  requirePermission(PERMISSIONS.MENU_DELETE),
+  validate({ params: idParamSchema }),
+  purgeItem,
 );
 
 router.get(

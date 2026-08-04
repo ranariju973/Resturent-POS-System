@@ -14,8 +14,10 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { validate } from '../middleware/validate.js';
+import { lookupLimiter } from '../middleware/rateLimit.js';
 import { PERMISSIONS } from '../constants/permissions.js';
 import {
+  lookupSchema,
   createCustomerSchema,
   updateCustomerSchema,
   listCustomersSchema,
@@ -24,6 +26,7 @@ import {
   idParamSchema,
 } from '../validators/customers.js';
 import {
+  lookupByPhone,
   listCustomers,
   getCustomer,
   getCustomerHistory,
@@ -35,6 +38,26 @@ import {
 const router = Router();
 
 router.use(requireAuth());
+
+/**
+ * Phone lookup for the billing screen's auto-fill.
+ *
+ * Declared first, before `/:id`, or the parameterised route matches 'lookup'
+ * as an id and the handler never runs. The same mistake has been caught by
+ * tests in tables.js and menu.js; there is an assertion for it here too.
+ *
+ * Rate-limited per user rather than per IP: the endpoint resolves a phone
+ * number to a person's name, and every till in a restaurant shares one public
+ * address, so an IP budget would either throttle the second terminal or stop
+ * nothing at all.
+ */
+router.get(
+  '/lookup',
+  requirePermission(PERMISSIONS.CUSTOMER_VIEW),
+  lookupLimiter,
+  validate({ query: lookupSchema }),
+  lookupByPhone,
+);
 
 router.get(
   '/',

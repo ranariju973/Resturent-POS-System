@@ -31,6 +31,15 @@ export const PERMISSIONS = Object.freeze({
   POS_APPLY_DISCOUNT: 'pos:apply_discount',
   POS_VOID_ORDER: 'pos:void_order',
   POS_OVERRIDE: 'pos:override',
+  /**
+   * Permanent removal of an order document. Distinct from POS_VOID_ORDER on
+   * purpose: voiding keeps the record and is a normal part of service, whereas
+   * this destroys it and the day's takings no longer reconcile against what
+   * the till actually holds. Granted to admin only, and never added to the
+   * cashier list — a cashier who can delete their own orders can take cash and
+   * leave nothing behind to notice.
+   */
+  ORDER_DELETE: 'order:delete',
 
   // Menu
   MENU_VIEW: 'menu:view',
@@ -116,7 +125,10 @@ const CASHIER_PERMISSIONS = [
   P.CUSTOMER_VIEW,
   P.CUSTOMER_CREATE,
   P.CUSTOMER_EDIT,
-  P.CUSTOMER_DELETE,
+  // CUSTOMER_DELETE is deliberately absent. Removing a customer record deletes
+  // someone's history and the contact details a refund or a complaint would be
+  // traced through; that is an owner's decision, not a tidying-up job for a
+  // cashier between orders.
 ];
 
 /**

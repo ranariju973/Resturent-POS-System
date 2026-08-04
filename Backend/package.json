@@ -1,5 +1,5 @@
 {
-  "name": "verdant-cafe-pos-backend",
+  "name": "kimche-restora-pos-backend",
   "version": "0.1.0",
   "private": true,
   "description": "Restaurant POS backend \u2014 Node + Express + MongoDB + Cloudinary",

@@ -252,7 +252,7 @@ const routes = fs.readFileSync(path.join(ROOT, 'src/routes/customers.js'), 'utf8
 const routeCode = routes.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
 const declared = [...routeCode.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']+)'/g)];
 
-t(`${declared.length} routes declared`, declared.length === 6, `${declared.length}`);
+t(`${declared.length} routes declared`, declared.length === 7, `${declared.length}`);
 t('requireAuth applied router-wide', /router\.use\(requireAuth\(\)\)/.test(routeCode));
 
 const blocks = routeCode.split(/router\.(?=get|post|put|patch|delete)/).slice(1);
@@ -267,9 +267,34 @@ t('every route names a permission',
     `history@${historyAt}, :id@${idAt}`);
 }
 
-t('reads use CUSTOMER_VIEW', (routeCode.match(/CUSTOMER_VIEW/g) ?? []).length === 3);
+t('reads use CUSTOMER_VIEW', (routeCode.match(/CUSTOMER_VIEW/g) ?? []).length === 4);
 t('create/edit/delete each use their own permission',
   /CUSTOMER_CREATE/.test(routeCode) && /CUSTOMER_EDIT/.test(routeCode) && /CUSTOMER_DELETE/.test(routeCode));
+
+// --- the phone lookup is a PII endpoint -------------------------------------
+// It answers "who owns this number" to anyone with a POS login, so these
+// assert the four things that stop it being a reverse phone directory.
+console.log('\n--- phone lookup cannot be used to enumerate customers ---');
+
+t('lookup is declared before /:id, or the id route swallows it',
+  routeCode.indexOf("'/lookup'") < routeCode.indexOf("'/:id'"));
+t('lookup is rate limited', /'\/lookup'[\s\S]{0,200}lookupLimiter/.test(routeCode));
+
+const lookupBody = ctl.slice(ctl.indexOf('export const lookupByPhone'), ctl.indexOf('export const listCustomers'));
+t('matches the whole number, not a prefix',
+  /phoneNormalized: digits/.test(lookupBody) && !/\$regex/.test(lookupBody));
+t('does NOT reuse Customer.search, which prefix-matches phones',
+  !/Customer\.search/.test(lookupBody));
+t('returns only found/id/name — no email, notes or history',
+  !/email|notes|lifetimeSpend|visitCount/.test(lookupBody));
+t('refuses to answer on too few digits',
+  /digits\.length < 6/.test(lookupBody));
+t('does not leak through publicCustomer, which carries PII',
+  !/publicCustomer/.test(lookupBody));
+
+const limiter = fs.readFileSync(path.join(ROOT, 'src/middleware/rateLimit.js'), 'utf8');
+t('the lookup limiter is keyed per user, not per IP (tills share one address)',
+  /lookupLimiter[\s\S]{0,400}keyGenerator: \(req\) => \(req\.user\?\.id/.test(limiter));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
