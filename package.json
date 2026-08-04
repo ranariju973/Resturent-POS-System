@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Root orchestration: runs the Express backend (port 5001) and the Vite frontend (port 8080, which proxies /api to the backend) together, so a single `dev` command boots the whole system.",
-  "packageManager": "pnpm@10.34.3",
   "scripts": {
-    "predev": "cd Backend && pnpm install && cd ../Resturent-POS-System-Frontend && npm install",
-    "dev": "(cd Backend && pnpm run dev) & (cd Resturent-POS-System-Frontend && npm run dev -- --port 8080 --host --strictPort) & wait"
+    "predev": "npm --prefix Backend install && npm --prefix Resturent-POS-System-Frontend install",
+    "dev": "(cd Backend && npm run dev) & (cd Resturent-POS-System-Frontend && npm run dev -- --port 8080 --host --strictPort) & wait",
+    "test": "npm --prefix Backend run verify",
+    "build": "npm --prefix Resturent-POS-System-Frontend run build"
   }
 }

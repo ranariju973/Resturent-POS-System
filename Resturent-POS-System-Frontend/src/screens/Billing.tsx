@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../icons/Icon';
 import { CONFIG, usePos } from '../store';
-import { money, plural } from '../lib/format';
+import { CURRENCY, money, plural } from '../lib/format';
 import { CARD_SHADOW, FilterPill, PageHeading, SearchInput } from '../components/ui';
 
 export function Billing() {
@@ -547,7 +547,7 @@ export function Billing() {
                   flexShrink: 0,
                 }}
               >
-                {state.discountMode === 'pct' ? '%' : '$'}
+                {state.discountMode === 'pct' ? '%' : CURRENCY}
               </span>
             </div>
             <div
@@ -561,7 +561,7 @@ export function Billing() {
               }}
             >
               <DiscountMode
-                label="$"
+                label={CURRENCY}
                 active={state.discountMode === 'flat'}
                 onClick={() => actions.patch({ discountMode: 'flat' })}
               />

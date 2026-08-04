@@ -1,6 +1,22 @@
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-export const money = (n: number) => `$${n.toFixed(2)}`;
+/** The single place the currency symbol is defined. Change it here, not inline. */
+export const CURRENCY = '₹';
+
+/**
+ * Indian grouping, not Western: 1,23,456.78 rather than 123,456.78. The last
+ * three digits group together, everything above them in pairs — `en-IN` knows
+ * this, a manual `toFixed` does not.
+ *
+ * Always two decimals, so a total never renders as a bare rupee amount next to
+ * one carrying paise.
+ */
+const inr = new Intl.NumberFormat('en-IN', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+export const money = (n: number) => `${CURRENCY}${inr.format(n)}`;
 
 export const fmtDate = (iso: string) => {
   const [y, m, d] = iso.split('-');
