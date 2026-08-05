@@ -230,11 +230,24 @@ t('merge refuses to build chains',
 console.log('\n--- destructive actions are guarded ---');
 t('delete refuses with an open order', /Cannot delete a table with an open order/.test(ctl));
 t('delete refuses while occupied', /Cannot delete an occupied table/.test(ctl));
-t('delete refuses if other tables merge into it', /other tables are merged into/.test(ctl));
+// This guard moved into the shared referenceGuard helper when table deletes
+// became hard, so it is asserted against that file rather than the controller.
+const guardSrc = fs.readFileSync(path.join(ROOT, 'src/utils/referenceGuard.js'), 'utf8');
+t('delete refuses if other tables merge into it', /other tables are merged into/.test(guardSrc));
 t('release refuses with an open bill', /Settle or void the open bill/.test(ctl));
 t('reconfiguring an occupied table is refused',
   /Cannot reconfigure a table while it is occupied/.test(ctl));
-t('delete is soft (order history keeps resolving)', /table\.isActive = false/.test(ctl));
+// Deletes are hard now. The property that protects order history is no longer
+// "the row survives" but "the server refuses when the row is referenced".
+t('delete removes the row from MongoDB', /Table\.deleteOne\(\{ _id: table\._id \}\)/.test(ctl));
+t('delete refuses when past orders reference the table',
+  /assertTableUnreferenced\(table\._id\)/.test(ctl));
+t('the reference check runs BEFORE the row is deleted',
+  ctl.indexOf('assertTableUnreferenced') < ctl.indexOf('Table.deleteOne'));
+t('the guard asks the orders collection rather than trusting a flag',
+  /Order\.exists\(\{ table: tableId \}\)/.test(guardSrc));
+t('delete is audited with a snapshot, since the row will be gone',
+  /meta: snapshot/.test(ctl));
 t('split persists nothing', !/splitBill[\s\S]{0,900}\.save\(\)/.test(ctl));
 
 console.log('\n--- route wiring ---');

@@ -29,6 +29,7 @@ import bcrypt from 'bcrypt';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
 import { ROLES, ROLE_VALUES, PIN_ROLES } from '../constants/enums.js';
+import { minorField } from '../utils/money.js';
 
 const BCRYPT_COST = 12;
 const PIN_LENGTH = 4;
@@ -126,6 +127,33 @@ const userSchema = new mongoose.Schema(
     overridePinLookup: { type: String, select: false, index: { unique: true, sparse: true } },
 
     avatarUrl: { type: String, trim: true, maxlength: 500, default: '' },
+
+    /**
+     * ── Employment ─────────────────────────────────────────────────────────
+     * The HR record, managed from the Employees screen (`user:manage`).
+     *
+     * These are NOT credentials and deliberately stay off the `select: false`
+     * list above: the roster has to render a salary and a join date, and
+     * hiding them would mean a second query for every row.
+     *
+     * `phone` is intentionally not unique. Customer owns the unique-phone
+     * constraint; a staff member who is also a customer is unremarkable, and a
+     * second unique index would only add a second way for a save to fail.
+     */
+    phone: { type: String, trim: true, maxlength: 24, default: '' },
+
+    /** Date of joining. Stored at UTC midnight, like Expense.date. */
+    joinedOn: { type: Date, default: null },
+
+    /**
+     * Monthly salary in minor units. `required: false` is an override of
+     * minorField's default: every account that predates this field has no
+     * salary, and so does every admin, so a required column would reject them
+     * on their next save.
+     */
+    monthlySalaryMinor: minorField({ required: false, default: 0 }),
+
+    employmentNotes: { type: String, trim: true, maxlength: 500, default: '' },
 
     isActive: { type: Boolean, default: true, index: true },
 
@@ -363,6 +391,40 @@ userSchema.statics.findActiveByPin = function findActiveByPin(pin) {
     role: mongoose.trusted({ $in: [...PIN_ROLES] }),
     isActive: true,
   }).select('+pinHash +pinLookup +tokenVersion +failedLoginAttempts +lockUntil +lockoutCount');
+};
+
+/**
+ * Is this PIN already held by somebody?
+ *
+ * One indexed lookup, because `pinLookup` is a deterministic HMAC — the same
+ * property that makes staff login O(1) makes this cheap.
+ *
+ * ── This is a COURTESY, not the enforcement ────────────────────────────────
+ * It exists so the admin gets "that PIN is taken" while the form is still
+ * open, instead of a save that fails for reasons they cannot see. It cannot be
+ * the guarantee: this query and the subsequent save are two round trips, and
+ * two admins adding staff at the same moment interleave through the gap. The
+ * unique index on `pinLookup` is what actually decides, so the caller must
+ * still handle the duplicate-key error — see savePinnedUser in
+ * employeeController.js.
+ *
+ * Deliberately unfiltered by `isActive` or `role`: the unique index is global
+ * and cares about neither, so anything narrower would pass here and then fail
+ * at write time — the exact confusion this is meant to prevent.
+ *
+ * @param {string} pin
+ * @param {any} [exceptId] ignore this user — re-saving someone's existing PIN
+ *   must not collide with themselves.
+ * @returns {Promise<boolean>}
+ */
+userSchema.statics.pinTaken = async function pinTaken(pin, exceptId = null) {
+  if (!/^\d+$/.test(String(pin))) return false;
+
+  const filter = { pinLookup: pinLookupHash(pin) };
+  // trusted() for the same reason as findActiveByPin: sanitizeFilter is global.
+  if (exceptId) filter._id = mongoose.trusted({ $ne: exceptId });
+
+  return Boolean(await this.exists(filter));
 };
 
 /** Load an admin by email with the credential fields attached. */

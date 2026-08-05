@@ -31,6 +31,9 @@ import kitchenRoutes from './src/routes/kitchen.js';
 import customerRoutes from './src/routes/customers.js';
 import dashboardRoutes from './src/routes/dashboard.js';
 import reportRoutes from './src/routes/reports.js';
+import employeeRoutes from './src/routes/employees.js';
+import attendanceRoutes from './src/routes/attendance.js';
+import payrollRoutes from './src/routes/payroll.js';
 import auditRoutes from './src/routes/audit.js';
 
 const app = express();
@@ -166,6 +169,9 @@ app.use('/api/kitchen', kitchenRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/employees', employeeRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/payroll', payrollRoutes);
 app.use('/api/audit-logs', auditRoutes);
 
 // --- Fallbacks (must stay last) -------------------------------------------

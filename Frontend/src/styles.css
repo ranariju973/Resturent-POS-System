@@ -1,0 +1,336 @@
+:root {
+  --cream: #f2f0eb;
+  --green: #00754a;
+  --green-dark: #006241;
+  --green-deep: #1e3932;
+  --green-tint: #d4e9e2;
+  --gold: #cba258;
+  --gold-tint: #f8ecd2;
+  --red: #c82014;
+  --line: #d6dbde;
+  --line-soft: #edebe9;
+  --surface: #ffffff;
+  --surface-muted: #f9f9f9;
+  --ink: rgba(0, 0, 0, 0.87);
+  --ink-mid: rgba(0, 0, 0, 0.58);
+  --ink-soft: rgba(0, 0, 0, 0.45);
+  --ink-faint: rgba(0, 0, 0, 0.32);
+  --card-shadow: 0 0 0.5px rgba(0, 0, 0, 0.14), 0 1px 1px rgba(0, 0, 0, 0.24);
+  --pop-shadow: 0 0 6px rgba(0, 0, 0, 0.24), 0 8px 12px rgba(0, 0, 0, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: Manrope, Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  background: var(--cream);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--green);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--green-dark);
+  text-decoration: underline;
+}
+
+input,
+button,
+select,
+textarea {
+  font-family: inherit;
+  letter-spacing: -0.01em;
+}
+
+button {
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 3px;
+}
+
+/* The prototype puts `transition: all 0.2s ease` + `scale(0.95)` on every button
+   without exception — that press feel is part of the design language. */
+.press {
+  transition: all 0.2s ease;
+}
+
+.press:active {
+  transform: scale(0.95);
+}
+
+.press:disabled {
+  cursor: not-allowed;
+  transform: none;
+}
+
+.hv-primary:hover:not(:disabled) {
+  background: var(--green-dark);
+  border-color: var(--green-dark);
+}
+
+.hv-green-border:hover:not(:disabled) {
+  border-color: var(--green);
+}
+
+.hv-green:hover:not(:disabled) {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.hv-green-fill:hover:not(:disabled) {
+  background: var(--green-tint);
+}
+
+.hv-green-chip:hover:not(:disabled) {
+  border-color: var(--green);
+  background: var(--green-tint);
+}
+
+.hv-danger:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.hv-danger-fill:hover:not(:disabled) {
+  background: #a81a10;
+  border-color: #a81a10;
+}
+
+.hv-danger-row:hover:not(:disabled) {
+  background: var(--surface-muted);
+  color: var(--red);
+}
+
+.hv-neutral:hover:not(:disabled) {
+  border-color: var(--ink-soft);
+}
+
+.hv-lift:hover:not(:disabled) {
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.14);
+}
+
+.hv-gold:hover:not(:disabled) {
+  background: #f0dcb0;
+}
+
+/* Nav rows carry their own hover tint so the active pill keeps its fill. */
+.hv-var:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.focus-green:focus {
+  border-color: var(--green);
+  outline: none;
+}
+
+.focus-green-lift:focus {
+  border-color: var(--green);
+  background: var(--surface);
+  outline: none;
+}
+
+@keyframes shake {
+  10%,
+  90% {
+    transform: translateX(-2px);
+  }
+  20%,
+  80% {
+    transform: translateX(4px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-7px);
+  }
+  40%,
+  60% {
+    transform: translateX(7px);
+  }
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tipIn {
+  from {
+    opacity: 0;
+    transform: translate(4px, -50%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, -50%);
+  }
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes badgePop {
+  from {
+    transform: scale(0.6);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+/* Session-restore splash and any in-flight auth indicator. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Applied while a login request is in flight. */
+.auth-pending {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Touch and small screens
+   --------------------------------------------------------------------------- */
+
+/*
+ * Nothing in this app is a document, so a rubber-band overscroll that reveals
+ * grey above the header just looks broken. `contain` keeps a scroll gesture
+ * inside the pane that owns it — a cart that has hit its end must not start
+ * scrolling the page behind it.
+ */
+html,
+body {
+  overscroll-behavior: none;
+}
+
+body {
+  /* Grey flash on every tap reads as lag on a till. The `press` class already
+     gives deliberate feedback. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Momentum scrolling in every pane that scrolls, not just the document. */
+* {
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 767px) {
+  /*
+   * iOS zooms the whole page when a focused input has a font smaller than
+   * 16px, and then leaves it zoomed. Every compact field in this app is 13-15px
+   * by design, so without this a cashier tapping the phone box gets a viewport
+   * they have to pinch back out of, mid-order.
+   *
+   * The rule is scoped to phones so the desktop type scale is untouched.
+   */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /*
+   * Touch targets are handled per component, NOT with a blanket
+   * `button { min-height: 40px }`.
+   *
+   * That rule was here and it broke every non-rectangular control: a 28px
+   * round IconButton became 28 wide by 40 tall — an oval — and the 18px-high
+   * Toggle stretched into a lozenge. A minimum height cannot know which of
+   * its buttons are square.
+   *
+   * IconButton now grows to 40x40 on its own (see components/ui.tsx), which
+   * gets the same thumb target while staying round.
+   */
+
+  /* A horizontal scrollbar on a phone is a bug, not a feature: it means
+     something is wider than the screen and content is unreachable. */
+  body {
+    overflow-x: hidden;
+  }
+
+  /*
+   * The safety net for overlapping text.
+   *
+   * Grid and flex children are `min-width: auto` by default, meaning they
+   * refuse to shrink below their own content — so a long figure does not clip
+   * or wrap, it overflows and lies across whatever sits beside it. That is the
+   * single cause behind the overlapping numbers on the dashboard, reports,
+   * customer and employee screens.
+   *
+   * Resetting it here makes the bug structurally impossible rather than fixed
+   * case by case. It does NOT override `flex-shrink: 0`, so the deliberately
+   * non-shrinking things — the filter pills in the scrolling strips, icon
+   * buttons — keep their size. Anything that genuinely needs a floor sets an
+   * explicit inline `minWidth`, and an inline style wins over this.
+   */
+  * {
+    min-width: 0;
+  }
+}
+
+/*
+ * Horizontal strips that must stay one row — the billing category filter, the
+ * report tabs — scroll rather than wrap. The bar itself is noise on a phone.
+ */
+.scroll-x {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * Grid and flex children default to `min-width: auto`, which means they refuse
+ * to shrink below their own content. In a narrow column that does not clip —
+ * it overflows, and the text lies across whatever is beside it. Every data row
+ * in this app is a grid, so this is applied at the container.
+ *
+ * `min-width: 0` lets the cell shrink; the overflow rules then decide what a
+ * too-long value does inside it rather than leaving it to spill.
+ */
+.cells > * {
+  min-width: 0;
+}
+
+.cells > * {
+  overflow-wrap: anywhere;
+}

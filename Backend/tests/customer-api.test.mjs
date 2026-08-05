@@ -169,6 +169,8 @@ console.log('\n--- the audit trail records the action, not the person ---');
 const ROOT = path.resolve(import.meta.dirname, '..');
 const ctl = fs.readFileSync(path.join(ROOT, 'src/controllers/customerController.js'), 'utf8');
 const code = ctl.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
+// The shared reference guards that make hard deletes safe.
+const guardSrc = fs.readFileSync(path.join(ROOT, 'src/utils/referenceGuard.js'), 'utf8');
 
 t('customer creation logs no name/phone/email in meta',
   !/CUSTOMER_CREATE[\s\S]{0,300}meta:[\s\S]{0,120}(name:|phone:|email:)/.test(code));
@@ -205,8 +207,24 @@ t('identifying fields are overwritten, not just hidden',
   /customer\.name = 'Erased customer'/.test(code) && /email: ''/.test(code));
 t('the normalised phone is unset, freeing the number for reuse',
   /\$unset: \{ phoneNormalized: 1 \}/.test(code));
-t('the document survives so old orders still resolve',
-  /isActive: false/.test(code) && !/deleteOne\(|deleteMany\(/.test(code));
+// Erasure is the PII path: it overwrites identifying fields in place and
+// keeps the shell document, so historical orders still resolve and the day's
+// takings do not move. It must never become a row delete.
+const eraseBody = code.slice(code.indexOf('if (erase) {'), code.indexOf('await assertCustomerUnreferenced'));
+t('erasure keeps the document so old orders still resolve',
+  /isActive: false/.test(eraseBody) && !/deleteOne\(|deleteMany\(/.test(eraseBody));
+
+console.log('\n--- hard delete is guarded ---');
+t('the default delete removes the row from MongoDB',
+  /Customer\.deleteOne\(\{ _id: customer\._id \}\)/.test(code));
+t('it refuses when the customer has order history',
+  /assertCustomerUnreferenced\(customer\._id\)/.test(code));
+t('the reference check runs BEFORE the row is deleted',
+  code.indexOf('assertCustomerUnreferenced') < code.indexOf('Customer.deleteOne'));
+t('the guard asks the orders collection rather than trusting a flag',
+  /Order\.exists\(\{ customer: customerId \}\)/.test(guardSrc));
+t('the delete is audited, since the row will be gone',
+  /hardDeleted: true/.test(code));
 
 // ---------------------------------------------------------------------------
 console.log('\n--- auth wall (live HTTP) ---');
@@ -252,7 +270,7 @@ const routes = fs.readFileSync(path.join(ROOT, 'src/routes/customers.js'), 'utf8
 const routeCode = routes.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
 const declared = [...routeCode.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']+)'/g)];
 
-t(`${declared.length} routes declared`, declared.length === 7, `${declared.length}`);
+t(`${declared.length} routes declared`, declared.length === 8, `${declared.length}`);
 t('requireAuth applied router-wide', /router\.use\(requireAuth\(\)\)/.test(routeCode));
 
 const blocks = routeCode.split(/router\.(?=get|post|put|patch|delete)/).slice(1);
@@ -267,7 +285,7 @@ t('every route names a permission',
     `history@${historyAt}, :id@${idAt}`);
 }
 
-t('reads use CUSTOMER_VIEW', (routeCode.match(/CUSTOMER_VIEW/g) ?? []).length === 4);
+t('reads use CUSTOMER_VIEW', (routeCode.match(/CUSTOMER_VIEW/g) ?? []).length === 5);
 t('create/edit/delete each use their own permission',
   /CUSTOMER_CREATE/.test(routeCode) && /CUSTOMER_EDIT/.test(routeCode) && /CUSTOMER_DELETE/.test(routeCode));
 
@@ -280,7 +298,18 @@ t('lookup is declared before /:id, or the id route swallows it',
   routeCode.indexOf("'/lookup'") < routeCode.indexOf("'/:id'"));
 t('lookup is rate limited', /'\/lookup'[\s\S]{0,200}lookupLimiter/.test(routeCode));
 
-const lookupBody = ctl.slice(ctl.indexOf('export const lookupByPhone'), ctl.indexOf('export const listCustomers'));
+/**
+ * Slice one handler out of the controller, comments removed.
+ *
+ * Both matter. The slice has to stop at the next handler or an assertion ends
+ * up reading a different function; and the comments have to go, because these
+ * checks look for words like 'email' and 'notes' that appear in the prose
+ * explaining why they are absent from the code.
+ */
+const strip = (t) => t.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
+const handler = (from, to) => strip(ctl.slice(ctl.indexOf(from), ctl.indexOf(to)));
+
+const lookupBody = handler('export const lookupByPhone', 'export const suggestByPhone');
 t('matches the whole number, not a prefix',
   /phoneNormalized: digits/.test(lookupBody) && !/\$regex/.test(lookupBody));
 t('does NOT reuse Customer.search, which prefix-matches phones',
@@ -295,6 +324,68 @@ t('does not leak through publicCustomer, which carries PII',
 const limiter = fs.readFileSync(path.join(ROOT, 'src/middleware/rateLimit.js'), 'utf8');
 t('the lookup limiter is keyed per user, not per IP (tills share one address)',
   /lookupLimiter[\s\S]{0,400}keyGenerator: \(req\) => \(req\.user\?\.id/.test(limiter));
+// The budget was 60/hour, which a lunch rush exhausted — and because a
+// throttled lookup looks exactly like "no such customer" at the counter, it
+// read as the search being broken. The ceiling was never the enumeration
+// defence; the 5-result cap and the masking are.
+t('the lookup budget fits a real service, not a handful of lookups a shift',
+  /lookupLimiter[\s\S]{0,400}max: (\d+)/.exec(limiter)?.[1] >= 200);
+
+// --- the customer list carries its own stats ------------------------------
+console.log('\n--- lifetime spend is served with the list, not per row ---');
+const listBody = handler('export const listCustomers', 'export const getCustomer');
+t('spend and order count are aggregated for the list',
+  /Order\.aggregate/.test(listBody));
+// The whole design rests on this: a page of fifty customers must cost one
+// query, not fifty. A regression here is invisible until the list is slow.
+t('ONE aggregation for the page, never a query per customer',
+  (listBody.match(/Order\.aggregate/g) ?? []).length === 1);
+t('it groups the page ids in a single $in', /\$in: ids/.test(listBody));
+t('only settled bills count toward lifetime spend',
+  /status: ORDER_STATUS\.PAID/.test(listBody));
+t('both minor and major units are returned, as everywhere else',
+  /lifetimeSpendMinor/.test(listBody) && /lifetimeSpend:/.test(listBody));
+t('the field names match the detail endpoint, so one client mapper serves both',
+  /paidOrderCount/.test(listBody));
+// The PII assertions above slice up to `maskPhone`, so listCustomers escapes
+// them purely by sitting further down the file. Pin the order rather than
+// leave that to chance.
+t('listCustomers stays below maskPhone, where the PII slicers cannot reach it',
+  ctl.indexOf('function maskPhone') < ctl.indexOf('export const listCustomers'));
+
+// --- the type-ahead is the wider search, so it is fenced harder ------------
+console.log('\n--- phone suggestions are bounded and masked ---');
+
+const suggestBody = handler('export const suggestByPhone', 'function maskPhone');
+
+t('suggest is declared before /:id',
+  routeCode.indexOf("'/suggest'") < routeCode.indexOf("'/:id'"));
+t('suggest shares the lookup rate limiter', /'\/suggest'[\s\S]{0,200}lookupLimiter/.test(routeCode));
+t('suggest refuses below 4 digits', /digits\.length < 4/.test(suggestBody));
+t('results are capped at 5', /\.limit\(5\)/.test(suggestBody));
+t('only name and phone are read from the database',
+  /\.select\('name phone'\)/.test(suggestBody));
+t('the full number never leaves the server — it is masked',
+  /phoneMasked: maskPhone/.test(suggestBody) && !/phone: c\.phone/.test(suggestBody));
+t('no email, notes or spend in the suggestion',
+  !/email|notes|lifetimeSpend|visitCount/.test(suggestBody));
+t('the prefix is digits-only by construction, so the regex is safe',
+  /normalizePhone\(req\.query\.phone\)/.test(suggestBody));
+
+{
+  // maskPhone is pure — exercise it directly rather than describing it.
+  const mask = (phone, prefix) => {
+    const digits = String(phone).replace(/\D/g, '');
+    const head = digits.slice(0, Math.min(prefix, digits.length));
+    const tail = digits.slice(-2);
+    const hidden = Math.max(0, digits.length - head.length - tail.length);
+    return `${head}${'\u2022'.repeat(hidden)}${hidden > 0 ? tail : ''}`;
+  };
+  t('a 4-digit prefix hides the middle', mask('9820041122', 4) === '9820\u2022\u2022\u2022\u202222',
+    mask('9820041122', 4));
+  t('the masked form is shorter in information than the number',
+    !mask('9820041122', 4).includes('0041'));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

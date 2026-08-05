@@ -24,6 +24,7 @@ import { can } from '../middleware/rbac.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { toMajor } from '../utils/money.js';
 import { logger } from '../utils/logger.js';
+import { assertCustomerUnreferenced } from '../utils/referenceGuard.js';
 
 const publicCustomer = (customer, stats) => ({
   id: String(customer._id),
@@ -78,6 +79,68 @@ export const lookupByPhone = asyncHandler(async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/customers/suggest
+// ---------------------------------------------------------------------------
+/**
+ * Type-ahead for the billing screen's phone box.
+ *
+ * ── This one is a prefix search, and that is a real trade ──────────────────
+ * `lookupByPhone` matches the whole number and cannot be walked. This matches
+ * a prefix from four digits, which can be — type 9820, read the names, try
+ * 9821. It exists because a cashier holding a phone number they half-remember
+ * is a genuine counter workflow, and the alternative they would otherwise use
+ * (the full customer list, already reachable at `GET /api/customers?search=`)
+ * leaks strictly more.
+ *
+ * So this is the narrower path, not a new hole:
+ *
+ *   • at most 5 results, so a prefix returns a sample rather than a page
+ *   • the middle of each number is masked — enough to tell two candidates
+ *     apart at the till, not enough to copy one down
+ *   • no email, notes, spend or visit history
+ *   • the same per-user rate limiter as the exact lookup
+ *
+ * If a wider result set or an unmasked number is ever wanted here, that is a
+ * decision about exposing the customer list, not a UI tweak.
+ */
+export const suggestByPhone = asyncHandler(async (req, res) => {
+  const digits = normalizePhone(req.query.phone);
+  if (digits.length < 4) return sendSuccess(res, { suggestions: [] });
+
+  const matches = await Customer.find({
+    // trusted() because `sanitizeFilter` is on globally (src/config/db.js).
+    // `digits` is \d+ by construction — normalizePhone strips everything else
+    // — so there is nothing here for a regex metacharacter to hide in.
+    phoneNormalized: mongoose.trusted({ $regex: `^${digits}` }),
+    isActive: true,
+  })
+    .select('name phone')
+    .sort({ lastVisitAt: -1 })
+    .limit(5);
+
+  return sendSuccess(res, {
+    suggestions: matches.map((c) => ({
+      id: String(c._id),
+      name: c.name,
+      phoneMasked: maskPhone(c.phone, digits.length),
+    })),
+  });
+});
+
+/**
+ * Show what the caller already typed, plus the last two digits, and mask the
+ * rest: '98200•••22'. The caller supplied the prefix, so revealing it back
+ * tells them nothing new; the tail is what lets them tell two candidates apart.
+ */
+function maskPhone(phone, prefixLength) {
+  const digits = normalizePhone(phone);
+  const head = digits.slice(0, Math.min(prefixLength, digits.length));
+  const tail = digits.slice(-2);
+  const hidden = Math.max(0, digits.length - head.length - tail.length);
+  return `${head}${'•'.repeat(hidden)}${hidden > 0 ? tail : ''}`;
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/customers
 // ---------------------------------------------------------------------------
 /**
@@ -114,8 +177,41 @@ export const listCustomers = asyncHandler(async (req, res) => {
     Customer.countDocuments(filter),
   ]);
 
+  /**
+   * Lifetime spend and order count for everyone on this page.
+   *
+   * ONE grouped aggregation over the page's ids, not a query per row: a list of
+   * fifty customers must not become fifty round trips, and the $in is served by
+   * the { customer: 1 } index on Order.
+   *
+   * Deliberately the same field names the detail endpoint returns
+   * (`lifetimeSpendMinor` / `lifetimeSpend` / `paidOrderCount`), so the list and
+   * the detail view stay one shape and the client needs one mapper rather than
+   * two that can drift.
+   *
+   * Only PAID orders count. An open tab is not money the customer has spent.
+   */
+  const ids = customers.map((c) => c._id);
+  const spendByCustomer = new Map();
+
+  if (ids.length > 0) {
+    // trusted() because `sanitizeFilter` is on globally (src/config/db.js).
+    const rows = await Order.aggregate([
+      { $match: { customer: mongoose.trusted({ $in: ids }), status: ORDER_STATUS.PAID } },
+      { $group: { _id: '$customer', spentMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
+    ]);
+    for (const row of rows) spendByCustomer.set(String(row._id), row);
+  }
+
   return sendSuccess(res, {
-    customers: customers.map((c) => publicCustomer(c)),
+    customers: customers.map((c) => {
+      const spend = spendByCustomer.get(String(c._id));
+      return publicCustomer(c, {
+        lifetimeSpendMinor: spend?.spentMinor ?? 0,
+        lifetimeSpend: toMajor(spend?.spentMinor ?? 0),
+        paidOrderCount: spend?.orders ?? 0,
+      });
+    }),
     total,
     limit,
     skip,
@@ -220,9 +316,11 @@ export const createCustomer = asyncHandler(async (req, res) => {
         details: [{ field: 'phone', message: 'Already registered', existingId: String(existing._id) }],
       });
     }
-    // The number belonged to a soft-deleted record. Reviving that document
-    // keeps its order history attached, rather than stranding it behind a
-    // second customer with the same phone number.
+    // The number belongs to an inactive record. Deletes are hard now, so this
+    // is either a legacy soft-deleted row from before that change or one
+    // scrubbed via `?erase=true`. Reviving the document keeps its order
+    // history attached, rather than stranding it behind a second customer
+    // with the same phone number.
     const revived = await Customer.findById(existing._id);
     Object.assign(revived, req.body, { isActive: true });
     await revived.save();
@@ -302,11 +400,12 @@ export const updateCustomer = asyncHandler(async (req, res) => {
 /**
  * Remove a customer. Two quite different operations behind one route.
  *
- * ── Default: soft delete ───────────────────────────────────────────────────
- * `isActive: false`. The record stops appearing in searches, past orders keep
- * resolving, and the deletion is reversible by re-creating with the same phone
- * number (see createCustomer). This is what "delete" means to a cashier who
- * mistyped a number.
+ * ── Default: hard delete, guarded ──────────────────────────────────────────
+ * The row leaves MongoDB entirely — but only when no order references it. A
+ * customer with history returns 409 instead, because deleting them would
+ * strand those orders and put holes in every report that joins through the
+ * customer. This is what "delete" means to a cashier who mistyped a number:
+ * the mistake is genuinely gone.
  *
  * ── `?erase=true`: irreversible PII scrub (admin only) ─────────────────────
  * This restaurant stores names, phone numbers and email addresses. Under the
@@ -372,15 +471,23 @@ export const deleteCustomer = asyncHandler(async (req, res) => {
     return sendSuccess(res, { erased: true, id: String(customer._id) });
   }
 
-  customer.isActive = false;
-  await customer.save();
+  // Hard delete, guarded. A customer with order history cannot be removed —
+  // those orders would be left pointing at nothing and every report that joins
+  // through the customer would show gaps. The 409 points at `?erase=true`,
+  // which is the correct tool for "this person must not be in our records":
+  // it scrubs the PII while keeping the shell so the takings do not move.
+  await assertCustomerUnreferenced(customer._id);
+
+  await Customer.deleteOne({ _id: customer._id });
 
   await AuditLog.record(
     {
       action: AUDIT_ACTION.CUSTOMER_DELETE,
       resource: 'Customer',
       resourceId: customer._id,
-      meta: { erased: false },
+      // No name/phone/email: the audit trail records that a customer record
+      // was destroyed, not who they were.
+      meta: { erased: false, hardDeleted: true },
     },
     req,
   );
@@ -390,6 +497,7 @@ export const deleteCustomer = asyncHandler(async (req, res) => {
 
 export default {
   lookupByPhone,
+  suggestByPhone,
   listCustomers,
   getCustomer,
   getCustomerHistory,

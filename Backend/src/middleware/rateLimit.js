@@ -128,14 +128,26 @@ export const apiLimiter = rateLimit({
  *
  * Keyed on the authenticated user rather than the IP: every terminal in a
  * restaurant shares one NAT address, so an IP budget would either be so large
- * it stops nothing or so small it throttles the second till. A cashier does a
- * handful of lookups per shift; 60 an hour is generous for real use and
- * useless for harvesting a list.
+ * it stops nothing or so small it throttles the second till.
+ *
+ * ── Why 400 and not the 60 this used to be ─────────────────────────────────
+ * 60 was sized for "a cashier does a handful of lookups per shift", which
+ * turned out to describe nobody. The till fires a request per settled phone
+ * entry, so a service doing 60-80 covers an hour exhausted the budget before
+ * the lunch rush finished — and because a throttled lookup is indistinguishable
+ * from "no match" at the counter, it read as the search being broken rather
+ * than blocked.
+ *
+ * 400 is roughly five times realistic peak use. It does not weaken the
+ * enumeration defence, because that was never the ceiling doing the work: the
+ * suggest endpoint caps results at five, masks the middle of every number, and
+ * refuses below four digits. Walking a ten-digit space needs millions of
+ * probes; the difference between 60 and 400 of them is noise.
  */
 export const lookupLimiter = rateLimit({
   ...baseOptions,
   windowMs: 60 * 60 * 1000,
-  max: 60,
+  max: 400,
   keyGenerator: (req) => (req.user?.id ? `user:${req.user.id}` : ipKeyGenerator(req)),
 });
 

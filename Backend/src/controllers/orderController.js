@@ -535,20 +535,30 @@ export const payOrder = asyncHandler(async (req, res) => {
     order.paidAt = new Date();
     await order.save({ session });
 
-    // Free the table. Without this the table stays occupied forever and the
-    // unique "one open order per table" index blocks the next party.
+    /**
+     * Release the BILL, but not the table.
+     *
+     * `currentOrder` must be cleared or the unique "one open order per table"
+     * index blocks the next party forever. The status is a different question:
+     * paying does not make a party stand up. They are still sitting there with
+     * their coffee, and a floor plan that turns the table green the instant the
+     * card is tapped tells the host a table is free that is not.
+     *
+     * So the table stays OCCUPIED until somebody explicitly clears it — the
+     * release endpoint, which is what the "clear" action on the floor calls.
+     * `occupiedAt` is kept for the same reason: the elapsed timer should keep
+     * running while the table is still held.
+     */
     if (order.table) {
       await Table.updateOne(
         { _id: order.table },
-        {
-          $set: { currentOrder: null, status: TABLE_STATUS.AVAILABLE, occupiedAt: null, mergedInto: null },
-        },
+        { $set: { currentOrder: null, mergedInto: null } },
         { session },
       );
-      // Any table merged into this one is released with it.
+      // A merged table is unmerged with the bill, but likewise stays seated.
       await Table.updateMany(
         { mergedInto: order.table },
-        { $set: { mergedInto: null, status: TABLE_STATUS.AVAILABLE, occupiedAt: null } },
+        { $set: { mergedInto: null } },
         { session },
       );
     }

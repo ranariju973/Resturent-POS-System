@@ -23,6 +23,7 @@ import { can } from '../middleware/rbac.js';
 import { uploadImageBuffer, deleteImage } from '../config/cloudinary.js';
 import { escapeRegex } from '../models/Customer.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
+import { assertMenuItemUnreferenced } from '../utils/referenceGuard.js';
 import { toMajor } from '../utils/money.js';
 import { logger } from '../utils/logger.js';
 import mongoose from 'mongoose';
@@ -276,32 +277,42 @@ export const setAvailability = asyncHandler(async (req, res) => {
 // DELETE /api/menu/items/:id     (admin)
 // ---------------------------------------------------------------------------
 /**
- * Soft delete.
+ * Hard delete. The row leaves MongoDB and the Cloudinary asset is destroyed.
  *
- * The document survives because historical orders reference it. The Cloudinary
- * asset does not: there is no restore endpoint, so keeping the image would
- * accumulate storage nothing can reach. Orders snapshot the item's name and
- * price, not its image, so no receipt is affected.
+ * ── Why this is allowed to be irreversible ─────────────────────────────────
+ * Because it refuses when it would not be safe. Orders reference menu items,
+ * so an item that has ever been ordered still has to resolve for receipts and
+ * reports — `assertMenuItemUnreferenced` turns that case into a 409 rather
+ * than a dangling id. An item nothing points at is referenced by nothing, and
+ * keeping its row forever is hoarding, not integrity.
+ *
+ * Orders snapshot the item's name and price, not its image, so destroying the
+ * asset never affects a receipt.
  */
 export const deleteItem = asyncHandler(async (req, res) => {
   const item = await MenuItem.findById(req.params.id).select('+imagePublicId');
-  if (!item || !item.isActive) throw ApiError.notFound('Menu item not found');
+  if (!item) throw ApiError.notFound('Menu item not found');
+
+  await assertMenuItemUnreferenced(item._id);
 
   const publicId = item.imagePublicId;
+  // Captured before the row goes: once deleted, the audit entry is the only
+  // record that this item ever existed.
+  const snapshot = { name: item.name, priceMinor: item.priceMinor, category: item.category };
 
-  await item.softDelete();
-
-  if (publicId) {
-    await discardUpload(publicId, req, 'item-deleted');
-    await MenuItem.updateOne({ _id: item._id }, { $set: { imageUrl: '', imagePublicId: null } });
-  }
+  // Order matters: drop the row first, then the asset. A failed Cloudinary
+  // call after the row is gone leaks one image, which is recoverable. A
+  // deleted asset followed by a failed row delete leaves a live menu item
+  // with a broken picture, which is not.
+  await MenuItem.deleteOne({ _id: item._id });
+  if (publicId) await discardUpload(publicId, req, 'item-deleted');
 
   await AuditLog.record(
     {
       action: AUDIT_ACTION.MENU_ITEM_DELETE,
       resource: 'MenuItem',
       resourceId: item._id,
-      meta: { name: item.name },
+      meta: snapshot,
     },
     req,
   );
@@ -315,14 +326,14 @@ export const deleteItem = asyncHandler(async (req, res) => {
 /**
  * Irreversibly remove a menu item.
  *
- * ── Why this can exist at all ──────────────────────────────────────────────
- * The ordinary delete is soft because orders reference menu items and history
- * has to keep resolving. That reasoning only holds for items that HAVE
- * history. An item added by mistake at 9am and removed at 9:01, never ordered,
- * is referenced by nothing — keeping its row forever is hoarding, not
- * integrity.
+ * ── Why this still exists ──────────────────────────────────────────────────
+ * Since deletes became hard, this is behaviourally the same as `deleteItem`:
+ * both refuse when an order references the item, both drop the row and destroy
+ * the Cloudinary asset. It is kept as a distinct route because the frontend
+ * calls it (menuApi.purgeItem) and because it records a separate audit action,
+ * which keeps "admin cleared a stale row" legible apart from ordinary deletes.
  *
- * So the safety property is not "admins are careful". It is that the server
+ * The safety property is not "admins are careful". It is that the server
  * refuses when a single order line points at this item. The check is the
  * feature; the deletion is the easy part.
  *
@@ -334,8 +345,6 @@ export const deleteItem = asyncHandler(async (req, res) => {
  * cannot be wrong.
  */
 export const purgeItem = asyncHandler(async (req, res) => {
-  // Soft-deleted items are the usual subject here, so this deliberately does
-  // not filter on isActive the way deleteItem does.
   const item = await MenuItem.findById(req.params.id).select('+imagePublicId');
   if (!item) throw ApiError.notFound('Menu item not found');
 

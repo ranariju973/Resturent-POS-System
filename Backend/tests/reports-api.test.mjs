@@ -161,9 +161,36 @@ t('unknown range param rejected', !ok(rangeSchema, { granularity: 'week' }));
   t('the dashboard does the same', /prevMonth\.salesMinor > 0[\s\S]{0,200}: null/.test(dashCode));
 
   console.log('\n--- expenses ---');
-  t('deletion is soft (a read P&L stays explicable)', /expense\.isActive = false/.test(rpt));
+  // Deletion is hard — an expense is a leaf record, nothing references it.
+  // The audit snapshot is what keeps an already-read P&L explicable.
+  t('deletion removes the row from MongoDB',
+    /Expense\.deleteOne\(\{ _id: expense\._id \}\)/.test(rpt));
+  t('the amount and category are snapshotted before the row goes',
+    rpt.indexOf('const snapshot') < rpt.indexOf('Expense.deleteOne'));
+  t('the audit entry carries the snapshot, not a dangling id',
+    /meta: snapshot/.test(rpt));
   t('expense writes are audited', /AUDIT_ACTION\.EXPENSE_CREATE/.test(rpt));
   t('deletions are audited too', /AUDIT_ACTION\.EXPENSE_DELETE/.test(rpt));
+
+  // --- each report owns its own payment split ------------------------------
+  // The monthly tab used to render the DAILY breakdown, because the monthly
+  // endpoint had none to give it. That showed one day's takings under a
+  // monthly heading whenever it showed anything at all.
+  console.log('\n--- payment breakdowns ---');
+  const dailyBody = rpt.slice(rpt.indexOf('export const dailyReport'), rpt.indexOf('export const monthlyReport'));
+  const monthlyBody = rpt.slice(rpt.indexOf('export const monthlyReport'), rpt.indexOf('export const profitAndLoss'));
+
+  t('the daily report groups by payment method',
+    /_id: '\$paymentMethod'/.test(dailyBody));
+  t('the monthly report groups by payment method too',
+    /_id: '\$paymentMethod'/.test(monthlyBody));
+  t('and returns it under the same key as daily, so one component renders both',
+    /byPaymentMethod:/.test(monthlyBody));
+  t('the monthly split covers the month, not a day',
+    /_id: '\$paymentMethod'[\s\S]{0,200}/.test(monthlyBody) &&
+      monthlyBody.includes('paidBetween(start, end)'));
+  t('an unrecorded method is labelled rather than dropped',
+    /'unrecorded'/.test(monthlyBody));
 }
 
 console.log('\n--- expense input ---');

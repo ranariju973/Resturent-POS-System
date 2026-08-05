@@ -62,6 +62,27 @@ const notes = z.string().trim().max(500, 'Notes are too long');
  */
 export const lookupSchema = z.object({ phone }).strict();
 
+/**
+ * Type-ahead suggestions for the billing screen.
+ *
+ * Deliberately its own schema with a LOWER floor than `lookupSchema` — four
+ * digits, because that is where a suggestion list becomes useful. That is also
+ * what makes it the more dangerous of the two endpoints: a prefix search can be
+ * walked, where an exact match cannot. The controller compensates by capping
+ * results, masking the middle of each number, and sharing the lookup rate
+ * limiter. See the note there before loosening any of it.
+ */
+export const suggestSchema = z
+  .object({
+    phone: z
+      .string()
+      .trim()
+      .min(4, 'Type at least 4 digits')
+      .max(24, 'Phone number is too long')
+      .regex(/^[+]?[\d\s()-]+$/, 'Phone number may contain only digits, spaces and + ( ) -'),
+  })
+  .strict();
+
 export const createCustomerSchema = z
   .object({
     name,

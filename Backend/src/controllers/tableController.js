@@ -29,6 +29,7 @@ import { PERMISSIONS } from '../constants/permissions.js';
 import { can } from '../middleware/rbac.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { splitMinor, toMajor } from '../utils/money.js';
+import { assertTableUnreferenced } from '../utils/referenceGuard.js';
 
 /**
  * The table shape sent to clients.
@@ -181,20 +182,20 @@ export const deleteTable = asyncHandler(async (req, res) => {
     throw ApiError.conflict('Cannot delete an occupied table');
   }
 
-  const absorbed = await Table.countDocuments({ mergedInto: table._id, isActive: true });
-  if (absorbed > 0) {
-    throw ApiError.conflict('Cannot delete a table that other tables are merged into');
-  }
+  // Hard delete, guarded: past orders reference the table, and a merge chain
+  // pointing at a row that no longer exists would break the floor plan.
+  await assertTableUnreferenced(table._id);
 
-  table.isActive = false;
-  await table.save();
+  const snapshot = { name: table.name, seats: table.seats };
+  await Table.deleteOne({ _id: table._id });
 
   await AuditLog.record(
     {
       action: AUDIT_ACTION.TABLE_DELETE,
       resource: 'Table',
       resourceId: table._id,
-      meta: { name: table.name },
+      // Once the row is gone this entry is the only trace it existed.
+      meta: snapshot,
     },
     req,
   );

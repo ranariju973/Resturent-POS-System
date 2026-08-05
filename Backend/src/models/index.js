@@ -15,5 +15,7 @@ export { Order } from './Order.js';
 export { Ticket } from './Ticket.js';
 export { Customer } from './Customer.js';
 export { Expense } from './Expense.js';
+export { Attendance } from './Attendance.js';
+export { Payroll } from './Payroll.js';
 export { AuditLog } from './AuditLog.js';
 export { Counter, nextSequence, serviceDayKey } from './Counter.js';

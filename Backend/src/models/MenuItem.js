@@ -5,10 +5,13 @@
  *   available  — the stock in / sold out toggle. Cashiers and kitchen staff
  *                may flip this (permission `menu:toggle_stock`); it is the
  *                only menu field they can touch. Changes hourly.
- *   isActive   — soft delete. Admin only. Permanent-ish.
+ *   isActive   — retired-item flag. Admin only. Retained for rows that
+ *                predate hard deletes, and as the guard used by findSellable.
  *
- * Deletion is soft because orders reference menu items. History has to keep
- * resolving, and a removed item must not vanish from last month's report.
+ * Deletion is a HARD delete (see menuController.deleteItem): the row leaves
+ * MongoDB and the Cloudinary asset is destroyed. It is refused with a 409
+ * whenever an order references the item, because history has to keep
+ * resolving and a sold item must not vanish from last month's report.
  * Orders additionally snapshot name and price at sale time, so a later
  * rename or reprice cannot rewrite what a customer was charged.
  */

@@ -15,7 +15,17 @@ import path from 'node:path';
 import { PERMISSION_VALUES } from '../src/constants/permissions.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const CLIENT = path.resolve(ROOT, '../Resturent-POS-System-Frontend/src/lib/permissions.ts');
+
+/**
+ * The frontend directory has been called both of these. Resolving either is
+ * not tidiness: this test SKIPS when it cannot find the client, so a rename
+ * silently switches the whole parity guarantee off rather than failing loudly.
+ * Trying both names means that cannot happen twice.
+ */
+const CLIENT_CANDIDATES = ['../Frontend', '../Resturent-POS-System-Frontend'].map((dir) =>
+  path.resolve(ROOT, `${dir}/src/lib/permissions.ts`),
+);
+const CLIENT = CLIENT_CANDIDATES.find((candidate) => fs.existsSync(candidate)) ?? CLIENT_CANDIDATES[0];
 
 let pass = 0;
 let fail = 0;
@@ -25,7 +35,7 @@ const t = (label, ok, note = '') => {
 };
 
 if (!fs.existsSync(CLIENT)) {
-  console.log('SKIP frontend not present at ../Resturent-POS-System-Frontend — nothing to compare');
+  console.log('SKIP frontend not present at ../Frontend — nothing to compare');
   console.log('\n0 passed, 0 failed');
   process.exit(0);
 }
@@ -63,7 +73,9 @@ t(`all ${referenced.length} screen guards resolve to a defined key`, dangling.le
   dangling.join(', '));
 
 console.log('\n--- every screen is guarded ---');
-const SCREENS = ['dashboard', 'billing', 'menu', 'tables', 'kitchen', 'customers', 'reports'];
+const SCREENS = [
+  'dashboard', 'billing', 'menu', 'tables', 'kitchen', 'customers', 'reports', 'employees',
+];
 const guarded = SCREENS.filter((s) => new RegExp(`^\\s*${s}:`, 'm').test(screenBlock));
 t(`${SCREENS.length} screens declared, ${guarded.length} guarded`, guarded.length === SCREENS.length,
   SCREENS.filter((s) => !guarded.includes(s)).join(', '));

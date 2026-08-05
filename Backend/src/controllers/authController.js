@@ -17,8 +17,8 @@ import bcrypt from 'bcrypt';
 import { User, MAX_FAILED_ATTEMPTS, BCRYPT_COST } from '../models/User.js';
 import { RefreshToken, hashToken } from '../models/RefreshToken.js';
 import { AuditLog } from '../models/AuditLog.js';
-import { AUDIT_ACTION, ROLE_LABELS } from '../constants/enums.js';
-import { permissionsFor, dashboardScopeFor } from '../constants/permissions.js';
+import { AUDIT_ACTION } from '../constants/enums.js';
+import { publicUser } from '../utils/publicUser.js';
 import {
   signAccessToken,
   signRefreshToken,
@@ -52,30 +52,6 @@ async function burnTiming(candidate) {
     /* the comparison's result is irrelevant — only its duration matters */
   }
 }
-
-/**
- * The user shape the client is allowed to see.
- *
- * `permissions` is included so the UI can hide what it must not offer — a
- * cashier should not see a Reports tab that 403s when clicked.
- *
- * It is a CONVENIENCE, not a control. Every route re-checks server-side
- * against the role stored in the database, so a client that edits this list
- * in memory gains exactly nothing: it just gets a 403 from the route it then
- * tries to call. The list is derived from the role, never sent by the client,
- * and never read back as input.
- */
-const publicUser = (user) => ({
-  id: String(user._id),
-  name: user.name,
-  role: user.role,
-  roleLabel: ROLE_LABELS[user.role] ?? user.role,
-  email: user.email ?? null,
-  avatarUrl: user.avatarUrl ?? '',
-  lastLoginAt: user.lastLoginAt ?? null,
-  permissions: permissionsFor(user.role),
-  dashboardScope: dashboardScopeFor(user.role),
-});
 
 /**
  * Issue an access/refresh pair, persist the refresh record and set the cookie.

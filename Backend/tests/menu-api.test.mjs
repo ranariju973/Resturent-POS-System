@@ -288,7 +288,25 @@ t('orphaned uploads are cleaned up on a failed save',
 t('the replaced image is deleted only AFTER a successful save',
   ctlSrc.indexOf('await item.save()') < ctlSrc.indexOf("'image-replaced'"));
 t('search term is regex-escaped', /escapeRegex\(search\)/.test(ctlSrc));
-t('soft delete keeps the document for order history', /softDelete\(\)/.test(ctlSrc));
+// --- hard delete is guarded --------------------------------------------------
+// Deletes are hard: the row leaves MongoDB and the Cloudinary asset with it.
+// The safety property is the order-history check, so assert it exists and runs
+// before anything is destroyed.
+const deleteBody = ctlSrc.slice(
+  ctlSrc.indexOf('export const deleteItem'),
+  ctlSrc.indexOf('export const purgeItem'),
+);
+t('delete removes the row from MongoDB', /MenuItem\.deleteOne/.test(deleteBody));
+t('delete refuses when the item appears on an order',
+  /assertMenuItemUnreferenced\(item\._id\)/.test(deleteBody));
+t('the reference check runs BEFORE the row is deleted',
+  deleteBody.indexOf('assertMenuItemUnreferenced') < deleteBody.indexOf('MenuItem.deleteOne'));
+t('the row is dropped before the Cloudinary asset',
+  deleteBody.indexOf('MenuItem.deleteOne') < deleteBody.indexOf("'item-deleted'"));
+t('the Cloudinary asset is destroyed with the row',
+  /discardUpload\(publicId, req, 'item-deleted'\)/.test(deleteBody));
+t('delete is audited with a snapshot, since the row will be gone',
+  /meta: snapshot/.test(deleteBody));
 
 // --- purge ------------------------------------------------------------------
 // The safety property of the hard delete is the order-history check, so these
@@ -308,8 +326,10 @@ t('the row is dropped before the Cloudinary asset',
   purgeBody.indexOf('MenuItem.deleteOne') < purgeBody.indexOf("'item-purged'"));
 t('purge is audited with a snapshot, since the row will be gone',
   /MENU_ITEM_PURGE/.test(purgeBody) && /meta: snapshot/.test(purgeBody));
-t('deleteOne on a menu item appears only inside purge',
-  (ctlSrc.match(/MenuItem\.deleteOne/g) ?? []).length === 1);
+// Exactly two: one in deleteItem, one in purgeItem. Both are guarded. A third
+// would mean a row can leave the collection down some unchecked path.
+t('menu rows are dropped only by the two guarded delete handlers',
+  (ctlSrc.match(/MenuItem\.deleteOne/g) ?? []).length === 2);
 
 const orderSrc = fs.readFileSync(path.join(ROOT, 'src/models/Order.js'), 'utf8');
 t('the history check is index-backed, not a collection scan',
@@ -319,7 +339,12 @@ t('availability handler assigns one field, not the body',
   /item\.available = available;/.test(ctlSrc) && !/Object\.assign\(item, req\.body\)/.test(ctlSrc));
 
 const catSrc = fs.readFileSync(path.join(ROOT, 'src/controllers/categoryController.js'), 'utf8');
-t('category delete refuses while items reference it', /itemCount > 0/.test(catSrc));
+t('category delete refuses while items reference it',
+  /assertCategoryEmpty\(category\._id\)/.test(catSrc));
+t('category delete removes the row from MongoDB',
+  /Category\.deleteOne\(\{ _id: category\._id \}\)/.test(catSrc));
+t('the emptiness check runs BEFORE the row is deleted',
+  catSrc.indexOf('assertCategoryEmpty') < catSrc.indexOf('Category.deleteOne'));
 t('category counts use one aggregation, not a query per row', /aggregate\(/.test(catSrc));
 
 console.log(`\n${pass} passed, ${fail} failed`);

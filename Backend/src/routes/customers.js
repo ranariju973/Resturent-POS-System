@@ -18,6 +18,7 @@ import { lookupLimiter } from '../middleware/rateLimit.js';
 import { PERMISSIONS } from '../constants/permissions.js';
 import {
   lookupSchema,
+  suggestSchema,
   createCustomerSchema,
   updateCustomerSchema,
   listCustomersSchema,
@@ -27,6 +28,7 @@ import {
 } from '../validators/customers.js';
 import {
   lookupByPhone,
+  suggestByPhone,
   listCustomers,
   getCustomer,
   getCustomerHistory,
@@ -57,6 +59,19 @@ router.get(
   lookupLimiter,
   validate({ query: lookupSchema }),
   lookupByPhone,
+);
+
+/**
+ * Type-ahead suggestions. Also before `/:id`, and behind the same limiter as
+ * the exact lookup — it is the wider of the two searches, so it gets no more
+ * budget than the narrow one.
+ */
+router.get(
+  '/suggest',
+  requirePermission(PERMISSIONS.CUSTOMER_VIEW),
+  lookupLimiter,
+  validate({ query: suggestSchema }),
+  suggestByPhone,
 );
 
 router.get(

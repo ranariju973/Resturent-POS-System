@@ -1,9 +1,10 @@
 /**
  * Menu category — 'Beverages', 'Salads', 'Pizza'.
  *
- * Deletion is soft (isActive: false). Menu items reference categories, and a
- * hard delete would either orphan them or force a cascade that silently
- * removes products from the POS grid mid-service.
+ * Deletion is hard — the row leaves MongoDB — but is refused while any menu
+ * item still references the category (see categoryController.deleteCategory).
+ * Deleting one regardless would either orphan those items or force a cascade
+ * that silently removes products from the POS grid mid-service.
  */
 import mongoose from 'mongoose';
 

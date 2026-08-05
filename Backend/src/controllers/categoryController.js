@@ -1,15 +1,16 @@
 /**
  * Menu category handlers.
  *
- * Categories are referenced by menu items, so deletion is soft and guarded:
- * removing a category that still has live items would leave those items
- * pointing at nothing, and the POS grid would render them under a blank pill.
+ * Categories are referenced by menu items, so deletion is hard but guarded:
+ * removing a category that still has items would leave those items pointing at
+ * nothing, and the POS grid would render them under a blank pill.
  */
 import { Category } from '../models/Category.js';
 import { MenuItem } from '../models/MenuItem.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { AUDIT_ACTION } from '../constants/enums.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
+import { assertCategoryEmpty } from '../utils/referenceGuard.js';
 
 const publicCategory = (category, itemCount) => ({
   id: String(category._id),
@@ -84,7 +85,7 @@ export const updateCategory = asyncHandler(async (req, res) => {
 // DELETE /api/menu/categories/:id  (admin)
 // ---------------------------------------------------------------------------
 /**
- * Refuses while live items still reference the category.
+ * Hard delete. Refuses while any item still references the category.
  *
  * The alternative — cascading the delete to its items — would remove products
  * from the POS mid-service on a single click, which is not a decision this
@@ -92,25 +93,21 @@ export const updateCategory = asyncHandler(async (req, res) => {
  * move or delete the items first.
  */
 export const deleteCategory = asyncHandler(async (req, res) => {
-  const category = await Category.findOne({ _id: req.params.id, isActive: true });
+  const category = await Category.findById(req.params.id);
   if (!category) throw ApiError.notFound('Category not found');
 
-  const itemCount = await MenuItem.countDocuments({ category: category._id, isActive: true });
-  if (itemCount > 0) {
-    throw ApiError.conflict(
-      `Cannot delete a category that still has ${itemCount} item${itemCount === 1 ? '' : 's'}`,
-    );
-  }
+  await assertCategoryEmpty(category._id);
 
-  category.isActive = false;
-  await category.save();
+  const snapshot = { name: category.name };
+  await Category.deleteOne({ _id: category._id });
 
   await AuditLog.record(
     {
       action: AUDIT_ACTION.MENU_ITEM_DELETE,
       resource: 'Category',
       resourceId: category._id,
-      meta: { name: category.name },
+      // Once the row is gone this entry is the only trace it existed.
+      meta: snapshot,
     },
     req,
   );

@@ -111,6 +111,48 @@ export const EXPENSE_CATEGORY = Object.freeze({
 
 export const EXPENSE_CATEGORY_VALUES = Object.freeze(Object.values(EXPENSE_CATEGORY));
 
+// --- Attendance ------------------------------------------------------------
+export const ATTENDANCE_STATUS = Object.freeze({
+  PRESENT: 'present',
+  ABSENT: 'absent',
+  HALF_DAY: 'half_day',
+  LEAVE: 'leave',
+});
+
+export const ATTENDANCE_STATUS_VALUES = Object.freeze(Object.values(ATTENDANCE_STATUS));
+
+/**
+ * The fraction of a day's pay each status earns. The single source of payroll
+ * truth — `computePayroll` reads nothing else to decide what a day is worth.
+ *
+ * It lives here, beside the statuses rather than in the payroll module, so that
+ * adding a status without deciding what it pays is a visible omission rather
+ * than a silent zero. A missing entry means a staff member is quietly not paid
+ * for those days, which surfaces as a wrong wage weeks later; enums.test.mjs
+ * asserts every status has a factor for exactly that reason.
+ *
+ * LEAVE pays in full: approved leave is time off, not a deduction. An
+ * unapproved absence is ABSENT.
+ */
+export const ATTENDANCE_PAY_FACTOR = Object.freeze({
+  [ATTENDANCE_STATUS.PRESENT]: 1,
+  [ATTENDANCE_STATUS.ABSENT]: 0,
+  [ATTENDANCE_STATUS.HALF_DAY]: 0.5,
+  [ATTENDANCE_STATUS.LEAVE]: 1,
+});
+
+// --- Payroll ---------------------------------------------------------------
+/**
+ * `draft` recomputes from attendance on every read; `paid` is frozen against a
+ * stored snapshot and no longer moves. See models/Payroll.js.
+ */
+export const PAYROLL_STATUS = Object.freeze({
+  DRAFT: 'draft',
+  PAID: 'paid',
+});
+
+export const PAYROLL_STATUS_VALUES = Object.freeze(Object.values(PAYROLL_STATUS));
+
 // --- Audit log -------------------------------------------------------------
 export const AUDIT_ACTION = Object.freeze({
   LOGIN_SUCCESS: 'auth.login.success',
@@ -155,6 +197,18 @@ export const AUDIT_ACTION = Object.freeze({
 
   EXPENSE_CREATE: 'expense.create',
   EXPENSE_DELETE: 'expense.delete',
+
+  // Recorded once per submitted day, not once per employee — a restaurant with
+  // twenty staff would otherwise push twenty entries into the trail every
+  // morning and bury everything else.
+  ATTENDANCE_MARK: 'attendance.mark',
+  ATTENDANCE_UPDATE: 'attendance.update',
+
+  PAYROLL_ADJUST: 'payroll.adjust',
+  PAYROLL_PAID: 'payroll.paid',
+  // Reopening a paid month is the one action here that rewrites a settled
+  // figure, so it is recorded apart from the adjustment that follows it.
+  PAYROLL_UNPAID: 'payroll.unpaid',
 });
 
 export const AUDIT_ACTION_VALUES = Object.freeze(Object.values(AUDIT_ACTION));

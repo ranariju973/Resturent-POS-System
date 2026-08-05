@@ -164,7 +164,7 @@ export const monthlyReport = asyncHandler(async (req, res) => {
   const prevStart = new Date(start);
   prevStart.setMonth(prevStart.getMonth() - 1);
 
-  const [totals, prev, daily, expenses] = await Promise.all([
+  const [totals, prev, daily, byPayment, expenses] = await Promise.all([
     Order.aggregate([
       { $match: paidBetween(start, end) },
       { $group: { _id: null, netMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
@@ -185,6 +185,15 @@ export const monthlyReport = asyncHandler(async (req, res) => {
         },
       },
       { $sort: { _id: 1 } },
+    ]),
+
+    // The same grouping the daily report does, over the month's bounds. The
+    // monthly tab used to borrow the DAILY split, which showed one day's
+    // figures under a monthly heading whenever it showed anything at all.
+    Order.aggregate([
+      { $match: paidBetween(start, end) },
+      { $group: { _id: '$paymentMethod', totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
+      { $sort: { totalMinor: -1 } },
     ]),
 
     Expense.aggregate([
@@ -214,6 +223,13 @@ export const monthlyReport = asyncHandler(async (req, res) => {
       const row = daily.find((d) => d._id === i + 1);
       return { day: i + 1, totalMinor: row?.totalMinor ?? 0, orders: row?.orders ?? 0 };
     }),
+    // Same shape as the daily report's, so one client component renders both.
+    byPaymentMethod: byPayment.map((p) => ({
+      method: p._id ?? 'unrecorded',
+      totalMinor: p.totalMinor,
+      total: toMajor(p.totalMinor),
+      orders: p.orders,
+    })),
   });
 });
 
@@ -354,22 +370,32 @@ export const createExpense = asyncHandler(async (req, res) => {
 });
 
 /**
- * Soft delete. A removed expense still changed a P&L that someone may have
- * already read, so the record stays — it simply stops counting.
+ * Hard delete. Nothing references an expense — it is a leaf record — so there
+ * is no integrity guard here, only the audit trail.
+ *
+ * Worth knowing: a deleted expense changes a P&L that someone may already have
+ * read. The row is gone, so the audit entry below carries the full amount and
+ * category and is the only surviving record that the cost was ever booked.
  */
 export const deleteExpense = asyncHandler(async (req, res) => {
-  const expense = await Expense.findOne({ _id: req.params.id, isActive: true });
+  const expense = await Expense.findById(req.params.id);
   if (!expense) throw ApiError.notFound('Expense not found');
 
-  expense.isActive = false;
-  await expense.save();
+  const snapshot = {
+    category: expense.category,
+    amountMinor: expense.amountMinor,
+    date: expense.date,
+    description: expense.description,
+  };
+
+  await Expense.deleteOne({ _id: expense._id });
 
   await AuditLog.record(
     {
       action: AUDIT_ACTION.EXPENSE_DELETE,
       resource: 'Expense',
       resourceId: expense._id,
-      meta: { category: expense.category, amountMinor: expense.amountMinor },
+      meta: snapshot,
     },
     req,
   );
