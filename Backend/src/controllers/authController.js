@@ -13,7 +13,7 @@
  *   • Nothing here logs a password or a PIN, successful or not.
  */
 import mongoose from 'mongoose';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { User, MAX_FAILED_ATTEMPTS, BCRYPT_COST } from '../models/User.js';
 import { RefreshToken, hashToken } from '../models/RefreshToken.js';
 import { AuditLog } from '../models/AuditLog.js';

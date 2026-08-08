@@ -25,7 +25,7 @@
  * also holding PIN_PEPPER.
  */
 import mongoose from 'mongoose';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
 import { ROLES, ROLE_VALUES, PIN_ROLES } from '../constants/enums.js';

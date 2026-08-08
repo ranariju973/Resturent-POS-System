@@ -2,7 +2,7 @@
   "name": "kimche-restora-pos-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "Restaurant POS backend \u2014 Node + Express + MongoDB + Cloudinary",
+  "description": "Restaurant POS backend — Node + Express + MongoDB + Cloudinary",
   "type": "module",
   "main": "server.js",
   "engines": {
@@ -20,7 +20,7 @@
     "docs": "node scripts/generate-api-docs.mjs"
   },
   "dependencies": {
-    "bcrypt": "^5.1.1",
+    "bcryptjs": "^3.0.3",
     "cloudinary": "^2.5.1",
     "compression": "^1.7.5",
     "cookie-parser": "^1.4.7",
