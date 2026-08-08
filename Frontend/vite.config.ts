@@ -28,6 +28,30 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    build: {
+      rolldownOptions: {
+        output: {
+          /*
+           * Motion in its own chunk.
+           *
+           * It is ~40KB gzipped and none of it is needed to paint the first
+           * screen — a till that loads the login form fast matters more than
+           * one whose transitions are ready a beat earlier. Splitting it lets
+           * the browser fetch it in parallel and cache it separately, so a
+           * deploy that only changes app code does not re-download it.
+           */
+          // Rolldown (Vite 8) wants a function here, not the object form
+          // Rollup accepted.
+          manualChunks: (id: string) => {
+            if (id.includes('node_modules/motion') || id.includes('node_modules/framer-motion')) {
+              return 'motion';
+            }
+            if (id.includes('node_modules/react')) return 'react';
+            return undefined;
+          },
+        },
+      },
+    },
     server: {
       proxy: {
         '/api': {

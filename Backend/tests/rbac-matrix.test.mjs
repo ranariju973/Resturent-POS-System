@@ -75,6 +75,7 @@ const SPEC = {
 
   [P.USER_MANAGE]: [ADMIN],
   [P.AUDIT_VIEW]: [ADMIN],
+  [P.SETTINGS_MANAGE]: [ADMIN],
 };
 
 console.log('--- every permission x every role ---');

@@ -51,6 +51,7 @@ export const PERMISSIONS = {
 
   USER_MANAGE: 'user:manage',
   AUDIT_VIEW: 'audit:view',
+  SETTINGS_MANAGE: 'settings:manage',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -68,6 +69,8 @@ export const SCREEN_PERMISSION: Record<ScreenId, Permission[]> = {
   // Staff records carry salaries, so this is admin-only in the strongest sense
   // available here: `user:manage` is granted to no other role.
   employees: [PERMISSIONS.USER_MANAGE],
+  // Operational configuration — deliberately its own grant, not user:manage.
+  printer: [PERMISSIONS.SETTINGS_MANAGE],
 };
 
 /** Does the session hold this permission? Missing list => nothing. */

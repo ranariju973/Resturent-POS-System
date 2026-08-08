@@ -16,6 +16,7 @@ process.env.MONGO_URI = 'mongodb://127.0.0.1:27017/verdant_pos_test';
 process.env.JWT_ACCESS_SECRET = 'a'.repeat(64);
 process.env.JWT_REFRESH_SECRET = 'b'.repeat(64);
 process.env.PIN_PEPPER = 'c'.repeat(64);
+process.env.INVOICE_TOKEN_PEPPER = 'v'.repeat(64);
 process.env.CORS_ORIGIN = 'http://localhost:5173';
 process.env.CLOUDINARY_CLOUD_NAME = 'test';
 process.env.CLOUDINARY_API_KEY = 'test';

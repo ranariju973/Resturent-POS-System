@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { Icon } from '../icons/Icon';
 import { useIsMobile } from '../lib/useViewport';
+import { Spinner } from './motion';
 
 export const CARD_SHADOW = '0 0 0.5px rgba(0,0,0,0.14), 0 1px 1px rgba(0,0,0,0.24)';
 export const POP_SHADOW = '0 0 6px rgba(0,0,0,0.24), 0 8px 12px rgba(0,0,0,0.14)';
@@ -249,13 +250,25 @@ export function LoadState({
   empty,
   emptyMessage,
   onRetry,
+  skeleton,
 }: {
   loading: boolean;
   error: string;
   empty?: boolean;
   emptyMessage?: string;
   onRetry?: () => void;
+  /**
+   * Placeholder shapes to show instead of the word "Loading…".
+   *
+   * A caller that knows what its content looks like should pass one: a grid of
+   * grey cards holds the layout still, where a centred line of text collapses
+   * the screen and then makes everything jump when the data lands. Callers
+   * that have no obvious shape keep the text.
+   */
+  skeleton?: ReactNode;
 }) {
+  if (loading && skeleton) return <>{skeleton}</>;
+
   if (loading) {
     return (
       <p style={noticeStyle}>
@@ -402,29 +415,56 @@ export function ModalTitle({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * The cancel/save pair every dialog ends with.
+ *
+ * `busy` disables BOTH buttons, not just save. Cancelling mid-write leaves the
+ * request in flight with nothing listening for its result — the dialog closes,
+ * the write lands anyway, and the screen shows stale data. Waiting the extra
+ * moment is the honest behaviour.
+ */
 export function ModalActions({
   onCancel,
   onSave,
   saveLabel = 'Save',
   destructive = false,
+  busy = false,
+  busyLabel = 'Saving…',
 }: {
   onCancel: () => void;
   onSave: () => void;
   saveLabel?: string;
   destructive?: boolean;
+  busy?: boolean;
+  busyLabel?: string;
 }) {
   return (
     <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 2 }}>
-      <button type="button" className="press hv-neutral" onClick={onCancel} style={cancelButton}>
+      <button
+        type="button"
+        className="press hv-neutral"
+        onClick={onCancel}
+        disabled={busy}
+        style={{ ...cancelButton, ...(busy ? { opacity: 0.5, cursor: 'default' } : null) }}
+      >
         Cancel
       </button>
       <button
         type="button"
         className={`press ${destructive ? 'hv-danger-fill' : 'hv-primary'}`}
         onClick={onSave}
-        style={destructive ? deleteButton : saveButton}
+        disabled={busy}
+        style={{
+          ...(destructive ? deleteButton : saveButton),
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+          ...(busy ? { opacity: 0.75, cursor: 'default' } : null),
+        }}
       >
-        {saveLabel}
+        {busy ? <Spinner size={14} /> : null}
+        {busy ? busyLabel : saveLabel}
       </button>
     </div>
   );

@@ -22,6 +22,11 @@ import type { DailyReport, ExpenseRow, MonthlyReport, PnlReport } from './lib/re
 import type { DashboardData } from './lib/dashboardApi';
 import type { PhoneSuggestion } from './lib/customersApi';
 import { ApiError } from './lib/api';
+import { money } from './lib/format';
+import * as settingsApi from './lib/settingsApi';
+import * as printing from './lib/printing';
+import type { BillData, KotData, PrinterSettings } from './lib/printing/types';
+import { DEFAULT_PRINTER_SETTINGS } from './lib/printing/types';
 import type {
   AttendanceRow,
   AttendanceStatus,
@@ -264,9 +269,59 @@ interface State {
   cart: CartLine[];
   discountMode: 'flat' | 'pct';
   discountValue: string;
-  sendOpen: boolean;
   /** Cart totals breakdown. The Total line itself is never collapsed. */
   totalsOpen: boolean;
+
+  /**
+   * The receipt just settled, kept so it can be shared after the cart clears.
+   *
+   * `payBill` wipes the order, the cart, the customer and the phone — which is
+   * correct (the next customer must not inherit them) but leaves nothing to
+   * show. The server cannot re-issue the URL either: it stores only a hash of
+   * the link's token.
+   *
+   * So a SNAPSHOT is taken before the reset. It carries enough to confirm what
+   * was just billed — who, how much, how many items — because a share panel
+   * that shows only a number reads as though the details were never captured.
+   */
+  /**
+   * The just-settled order, kept so a bill can still be printed after payment.
+   *
+   * `lastSettled` above carries an item COUNT, not the items — it exists to
+   * drive the share panel. `payBill` clears the cart, the order and the table,
+   * so without this snapshot a bill printed after payment would have no dishes
+   * on it. Taken immediately before the reset.
+   */
+  lastPrintable: {
+    order: ordersApi.Order;
+    tableName: string;
+    customerName: string;
+  } | null;
+
+  printerSettings: PrinterSettings;
+  printerDraft: PrinterSettings;
+  printerLoading: boolean;
+  printerSaving: boolean;
+  printerError: string;
+  printTab: 'receipt' | 'business' | 'printers';
+  printTransport: 'browser' | 'qz';
+  qzAvailable: boolean;
+  qzChecking: boolean;
+  /** Printer names QZ reports for this machine. Empty under browser print. */
+  qzPrinters: string[];
+  /** A print is in flight — the buttons disable so nobody double-taps. */
+  printBusy: boolean;
+
+  lastSettled: {
+    invoiceNo: string;
+    url: string;
+    /** Digits only, never the masked display form. Empty for a walk-in. */
+    phone: string;
+    customerName: string;
+    itemCount: number;
+    total: number;
+    paymentMethod: string;
+  } | null;
   /**
    * Dine-in, takeaway or delivery. Drives whether a table is asked for at all:
    * the server refuses a dine-in order with no table AND refuses a table on
@@ -292,6 +347,8 @@ interface State {
   modal: Modal | null;
   draft: ItemDraft;
   menuLoading: boolean;
+  /** A menu write is in flight. Item saves also upload an image. */
+  menuSaving: boolean;
   menuError: string;
 
   tables: Table[];
@@ -446,10 +503,24 @@ const createInitialState = (): State => {
     cart: [],
     discountMode: 'flat',
     discountValue: '0',
-    sendOpen: false,
     // Expanded by default — the breakdown is the normal state; collapsing
     // is what a cashier does when the item list needs the room.
     totalsOpen: true,
+    lastSettled: null,
+    lastPrintable: null,
+    printerSettings: DEFAULT_PRINTER_SETTINGS,
+    printerDraft: DEFAULT_PRINTER_SETTINGS,
+    printerLoading: false,
+    printerSaving: false,
+    printerError: '',
+    printTab: 'receipt',
+    // Read from localStorage on boot: this describes the machine, and it has
+    // to be right before the network is.
+    printTransport: printing.readTransportPreference(),
+    qzAvailable: false,
+    qzChecking: false,
+    qzPrinters: [],
+    printBusy: false,
     orderType: 'dine-in',
     orderTable: null,
     activeOrder: null,
@@ -475,6 +546,7 @@ const createInitialState = (): State => {
       color: '#00754A',
     },
     menuLoading: false,
+    menuSaving: false,
     menuError: '',
 
     tables: [],
@@ -892,7 +964,8 @@ function usePosState() {
           password: '',
           loginError: '',
           authPending: false,
-          sendOpen: false,
+          lastSettled: null,
+          lastPrintable: null,
           toast: '',
         });
         void apiLogout();
@@ -1049,7 +1122,7 @@ function usePosState() {
                 })
               : order;
 
-          patch({ activeOrder: withDiscount, checkoutPending: false });
+          patch({ activeOrder: withDiscount, checkoutPending: false, lastPrintable: null });
           flash(`Bill #${withDiscount.orderNo} opened`);
 
           // The floor and the board both changed: the table is now seated and
@@ -1065,14 +1138,357 @@ function usePosState() {
       },
 
       /** Settle an open bill. */
+      /**
+       * Hand the receipt to the customer over WhatsApp.
+       *
+       * ── Why wa.me and not an API ───────────────────────────────────────
+       * The Business API costs money per conversation and needs an approved
+       * template. `wa.me` is a plain deep link: it opens WhatsApp with the
+       * message already typed, and the cashier taps send. Free, no account,
+       * and the message comes from the restaurant's own number.
+       *
+       * The number must be digits only, with a country code, and must NEVER be
+       * the masked display value — that contains bullet characters and would
+       * open a chat with nobody. `payBill` captures the typed digits for
+       * exactly this reason.
+       */
+      shareOnWhatsApp: () => {
+        const settled = ref.current.lastSettled;
+        if (!settled) return;
+
+        /**
+         * Strip everything that is not a digit — including the bullet
+         * characters of a masked number, which is what used to reach wa.me and
+         * made WhatsApp answer "please enter mobile number". Anything left
+         * that is too short to dial is reported here, in words the cashier can
+         * act on, rather than being handed to WhatsApp to complain about.
+         */
+        const digits = (settled.phone ?? '').replace(/\D/g, '');
+        if (digits.length < 10) {
+          return flash(
+            digits.length === 0
+              ? 'No phone number on this bill — use Copy link instead.'
+              : 'That phone number is too short to send to. Use Copy link instead.',
+          );
+        }
+
+        // A bare 10-digit Indian number needs the country code prefixed, or
+        // WhatsApp resolves it against whatever locale the phone happens to be
+        // in and opens a chat with a stranger.
+        const msisdn = digits.length === 10 ? `91${digits}` : digits;
+
+        // The amount goes in the message, not just behind the link: a bare URL
+        // from an unknown number reads like spam, and a customer should be able
+        // to see what it is for before deciding to tap it.
+        const message =
+          `Thank you for visiting ${CONFIG.restaurantName}.\n\n` +
+          `Invoice ${settled.invoiceNo}\n` +
+          `Total: ${money(settled.total)}\n\n` +
+          `View or download your bill:\n${settled.url}`;
+
+        window.open(
+          `https://wa.me/${msisdn}?text=${encodeURIComponent(message)}`,
+          '_blank',
+          'noopener,noreferrer',
+        );
+
+        /**
+         * Handing the receipt over is the end of this panel's job, so it goes
+         * away — rather than sitting on a shared screen with the last
+         * customer's name and total until the next bill happens to settle.
+         *
+         * Only the till's copy is cleared. The invoice and the link already
+         * sent are untouched and keep working.
+         */
+        patch({ lastSettled: null });
+      },
+
+      /** The fallback: works with no phone number and no WhatsApp installed. */
+      copyInvoiceLink: async () => {
+        const settled = ref.current.lastSettled;
+        if (!settled) return;
+
+        try {
+          await navigator.clipboard.writeText(settled.url);
+          flash('Invoice link copied');
+        } catch {
+          // Clipboard access is refused outside a secure context, which a POS
+          // on a plain-HTTP LAN address genuinely is. Show the link so it can
+          // still be read out or typed — and KEEP the panel up, since a link
+          // that has to be transcribed by hand has not been shared yet.
+          return flash(settled.url);
+        }
+
+        patch({ lastSettled: null });
+      },
+
+      // ---------------------------------------------------------------------
+      // Printing
+      // ---------------------------------------------------------------------
+      setPrintTab: (printTab: State['printTab']) => patch({ printTab }),
+
+      setPrinterDraft: (p: Partial<PrinterSettings>) =>
+        patch({ printerDraft: { ...ref.current.printerDraft, ...p }, printerError: '' }),
+
+      loadPrinterSettings: async () => {
+        patch({ printerLoading: true, printerError: '' });
+        try {
+          const settings = await settingsApi.getPrinterSettings();
+          patch({ printerSettings: settings, printerDraft: settings, printerLoading: false });
+        } catch (err) {
+          patch({
+            printerLoading: false,
+            printerError: describe(err, 'Could not load the printer settings.'),
+          });
+        }
+      },
+
+      savePrinterSettings: async () => {
+        const draft = ref.current.printerDraft;
+        patch({ printerSaving: true, printerError: '' });
+        try {
+          // effective* are server-derived; sending them back would be rejected
+          // by the strict schema.
+          const { effectiveName, effectiveFooter, ...body } = draft;
+          void effectiveName;
+          void effectiveFooter;
+          const settings = await settingsApi.updatePrinterSettings(body);
+          patch({ printerSettings: settings, printerDraft: settings, printerSaving: false });
+          flash('Printer settings saved');
+        } catch (err) {
+          patch({
+            printerSaving: false,
+            printerError: describe(err, 'Could not save those settings.'),
+          });
+        }
+      },
+
+      /** Per-terminal, so it is written to localStorage rather than the API. */
+      setPrintTransport: (printTransport: 'browser' | 'qz') => {
+        printing.writeTransportPreference(printTransport);
+        patch({ printTransport });
+        if (printTransport === 'qz') void actions.checkQz();
+      },
+
+      checkQz: async () => {
+        patch({ qzChecking: true });
+        printing.clearQzProbeCache();
+        const qzAvailable = await printing.isQzAvailable();
+        // Fetched in the same pass: a connected daemon that cannot name a
+        // printer is exactly the state worth showing on the settings screen.
+        const qzPrinters = qzAvailable ? await printing.listQzPrinters() : [];
+        patch({ qzAvailable, qzPrinters, qzChecking: false });
+      },
+
+      printKot: async () => {
+        const s = ref.current;
+        const source = s.lastPrintable
+          ? { order: s.lastPrintable.order, tableName: s.lastPrintable.tableName }
+          : s.activeOrder
+            ? {
+                order: s.activeOrder,
+                tableName: s.tables.find((t) => t.id === s.orderTable)?.name ?? '',
+              }
+            : null;
+        if (!source || s.printBusy) return;
+
+        const data: KotData = {
+          orderNo: source.order.orderNo,
+          // Mirrors ticketSource() on the server — what the expo needs to
+          // route the ticket, and the only routing information a cook gets.
+          source:
+            source.order.type === 'dine-in' && source.tableName
+              ? `Table ${source.tableName}`
+              : source.order.type === 'takeaway'
+                ? 'Takeaway'
+                : 'Delivery',
+          type: source.order.type,
+          placedAt: new Date(source.order.createdAt),
+          items: source.order.items.map((l) => ({ name: l.name, qty: l.qty, note: l.note })),
+        };
+
+        patch({ printBusy: true });
+        try {
+          const out = await printing.printKot(data, s.printerSettings);
+          flash(
+            out.degraded
+              ? 'QZ Tray is not running — opened the browser print dialog instead'
+              : 'Kitchen ticket sent',
+          );
+        } catch (err) {
+          flash(describe(err, 'Could not print the kitchen ticket.'));
+        } finally {
+          patch({ printBusy: false });
+        }
+      },
+
+      printBill: async () => {
+        const s = ref.current;
+        const source = s.lastPrintable
+          ? s.lastPrintable
+          : s.activeOrder
+            ? {
+                order: s.activeOrder,
+                tableName: s.tables.find((t) => t.id === s.orderTable)?.name ?? '',
+                customerName: s.customer.trim(),
+              }
+            : null;
+        if (!source || s.printBusy) return;
+
+        const settings = s.printerSettings;
+        const o = source.order;
+        const data: BillData = {
+          invoiceNo: o.invoiceNo ?? `#${o.orderNo}`,
+          orderNo: o.orderNo,
+          business: {
+            name: settings.effectiveName,
+            address: settings.businessAddress,
+            phone: settings.businessPhone,
+            gstNumber: settings.gstNumber,
+            footer: settings.effectiveFooter,
+          },
+          tableName: source.tableName || null,
+          customerName: source.customerName || null,
+          placedAt: new Date(o.createdAt),
+          // Null while unpaid — the template then prints ** UNPAID **, which
+          // is the honest thing to hand someone before they have paid.
+          paidAt: o.paidAt ? new Date(o.paidAt) : null,
+          paymentMethod: o.paymentMethod,
+          items: o.items.map((l) => ({
+            name: l.name,
+            qty: l.qty,
+            note: l.note,
+            unitPrice: l.unitPrice,
+            lineTotal: l.lineTotal,
+          })),
+          subtotal: o.subtotal,
+          discount: o.discount,
+          tax: o.tax,
+          taxRate: o.taxRate,
+          total: o.total,
+        };
+
+        patch({ printBusy: true });
+        try {
+          const out = await printing.printBill(data, settings);
+          flash(
+            out.degraded
+              ? 'QZ Tray is not running — opened the browser print dialog instead'
+              : 'Bill sent to the printer',
+          );
+        } catch (err) {
+          flash(describe(err, 'Could not print the bill.'));
+        } finally {
+          patch({ printBusy: false });
+        }
+      },
+
+      /**
+       * A fixed sample through the CURRENT DRAFT settings.
+       *
+       * Draft, not saved: checking the paper size should not require
+       * committing it first. The sample deliberately includes a name long
+       * enough to wrap, a note, and a discount — the three things that break
+       * a column layout.
+       */
+      printTestReceipt: async (job: 'kot' | 'bill') => {
+        const settings = ref.current.printerDraft;
+        const now = new Date();
+        const items = [
+          { name: 'Paneer Butter Masala', qty: 2, note: '', unitPrice: 320, lineTotal: 640 },
+          { name: 'Garlic Naan with extra butter and coriander', qty: 3, note: 'No onion', unitPrice: 70, lineTotal: 210 },
+          { name: 'Cold Drink', qty: 1, note: '', unitPrice: 60, lineTotal: 60 },
+        ];
+
+        patch({ printBusy: true });
+        try {
+          const out =
+            job === 'kot'
+              ? await printing.printKot(
+                  { orderNo: 1042, source: 'Table T5', type: 'dine-in', placedAt: now, items },
+                  settings,
+                )
+              : await printing.printBill(
+                  {
+                    invoiceNo: 'INV-20260807-1042',
+                    orderNo: 1042,
+                    business: {
+                      name: settings.effectiveName,
+                      address: settings.businessAddress,
+                      phone: settings.businessPhone,
+                      gstNumber: settings.gstNumber,
+                      footer: settings.effectiveFooter,
+                    },
+                    tableName: 'T5',
+                    customerName: 'Test Customer',
+                    placedAt: now,
+                    paidAt: now,
+                    paymentMethod: 'cash',
+                    items,
+                    subtotal: 910,
+                    discount: 50,
+                    tax: 0,
+                    taxRate: 0,
+                    total: 860,
+                  },
+                  settings,
+                );
+          flash(out.degraded ? 'QZ Tray is not running — used the browser instead' : 'Test sent');
+        } catch (err) {
+          flash(describe(err, 'Could not print the test.'));
+        } finally {
+          patch({ printBusy: false });
+        }
+      },
+
       payBill: async (paymentMethod: ordersApi.PaymentMethod) => {
         const s = ref.current;
         if (!s.activeOrder || s.checkoutPending) return;
 
+        /**
+         * Snapshotted BEFORE the reset below clears every one of these.
+         *
+         * The phone is taken from `customerPhone`, never `customerPhoneMasked`
+         * — the masked form is display text full of bullet characters and
+         * would open a WhatsApp chat with nobody.
+         */
+        // Resolved before the reset clears `orderTable` — the paid order carries
+        // a table id, and a receipt needs the name.
+        const settledTableName = s.tables.find((t) => t.id === s.orderTable)?.name ?? '';
+        const settled = {
+          // Placeholder: the authoritative number comes back with the payment
+          // response, since a customer attached by id was never typed here.
+          phone: s.customerPhone.trim(),
+          customerName: s.customer.trim(),
+          itemCount: s.cart.reduce((sum, line) => sum + line.qty, 0),
+          total: s.activeOrder.total,
+        };
+
         patch({ checkoutPending: true });
         try {
-          const paid = await ordersApi.payOrder(s.activeOrder.id, { paymentMethod });
+          const { order: paid, invoice } = await ordersApi.payOrder(s.activeOrder.id, {
+            paymentMethod,
+          });
           patch({
+            // The paid order itself, so a bill can still be printed once the
+            // cart is gone. `lastSettled` holds a count, not the items.
+            lastPrintable: {
+              order: paid,
+              tableName: settledTableName,
+              customerName: settled.customerName,
+            },
+            lastSettled: invoice
+              ? {
+                  invoiceNo: invoice.invoiceNo,
+                  url: invoice.url,
+                  ...settled,
+                  // Prefer the server's number. For a returning customer the
+                  // till only ever held a masked form, which WhatsApp rejects
+                  // with "please enter mobile number".
+                  phone: invoice.customerPhone ?? settled.phone,
+                  paymentMethod,
+                }
+              : null,
             activeOrder: null,
             checkoutPending: false,
             cart: [],
@@ -1086,7 +1502,6 @@ function usePosState() {
             customerSuggestions: [],
             suggestOpen: false,
             orderTable: null,
-            sendOpen: false,
           });
           flash(`Bill #${paid.orderNo} settled — ${paymentMethod}`);
           void actions.loadTables();
@@ -1118,6 +1533,8 @@ function usePosState() {
             customerKnown: false,
             customerId: null,
             orderTable: null,
+            lastSettled: null,
+            lastPrintable: null,
           });
           flash(`Bill #${voided.orderNo} voided`);
           void actions.loadTables();
@@ -1238,22 +1655,26 @@ function usePosState() {
           image: s.draft.file ?? null,
         };
 
+        patch({ menuSaving: true });
         try {
           if (modal.mode === 'add') {
             const item = await menuApi.createItem(payload);
-            patch({ items: [...s.items, item], selCat: item.cat, modal: null });
+            patch({ menuSaving: false, items: [...s.items, item], selCat: item.cat, modal: null });
             return flash(`"${name}" added to the menu`);
           }
 
-          if (!modal.target) return;
+          // Every exit clears the flag, including this early return — a
+          // stuck `true` leaves the dialog disabled with no way out.
+          if (!modal.target) return patch({ menuSaving: false });
           const item = await menuApi.updateItem(modal.target, payload);
           patch({
+            menuSaving: false,
             items: s.items.map((i) => (i.id === item.id ? item : i)),
             modal: null,
           });
           flash(`"${name}" updated`);
         } catch (err) {
-          patch({ modal: null });
+          patch({ menuSaving: false, modal: null });
           flash(describe(err, 'Could not save the item.'));
         }
       },

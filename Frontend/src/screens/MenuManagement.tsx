@@ -12,6 +12,7 @@ import {
   card,
   primaryPill,
 } from '../components/ui';
+import { SkeletonGrid } from '../components/motion';
 import { CategoryModal, DeleteModal, ItemModal } from '../components/menuModals';
 
 export function MenuManagement() {
@@ -338,6 +339,7 @@ export function MenuManagement() {
 
             <LoadState
               loading={state.menuLoading}
+              skeleton={<SkeletonGrid count={isMobile ? 6 : 9} minWidth={isMobile ? 148 : 200} />}
               error={state.menuError}
               empty={!state.menuLoading && !state.menuError && visible.length === 0}
               emptyMessage="Nothing here yet — add a menu item to this category."

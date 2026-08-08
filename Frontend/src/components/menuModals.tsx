@@ -64,7 +64,7 @@ export function CategoryModal() {
         </div>
       </div>
 
-      <ModalActions onCancel={actions.closeModal} onSave={actions.saveCat} />
+      <ModalActions onCancel={actions.closeModal} onSave={actions.saveCat} busy={state.menuSaving} />
     </ModalOverlay>
   );
 }
@@ -229,7 +229,12 @@ export function ItemModal() {
         </button>
       </div>
 
-      <ModalActions onCancel={actions.closeModal} onSave={actions.saveItem} />
+      <ModalActions
+        onCancel={actions.closeModal}
+        onSave={actions.saveItem}
+        busy={state.menuSaving}
+        busyLabel={state.draft.file ? 'Uploading…' : 'Saving…'}
+      />
     </ModalOverlay>
   );
 }

@@ -108,15 +108,37 @@ export async function setDiscount(
   return data.order;
 }
 
+/** The shareable receipt link. Returned once, at payment, and never again. */
+export interface InvoiceLink {
+  invoiceNo: string;
+  url: string;
+  /**
+   * The customer's real number, for the WhatsApp hand-off.
+   *
+   * It comes from the server rather than the till's own state because a
+   * customer picked from the phone suggestions is attached by id — the client
+   * only ever saw a MASKED number (`9820•••22`), which cannot be dialled.
+   */
+  customerPhone: string | null;
+}
+
+/**
+ * Settle a bill.
+ *
+ * The response carries the invoice link alongside the order. It is the ONLY
+ * time the server can produce it: only a hash of the link's token is stored,
+ * so nothing can rebuild the URL afterwards. Whatever needs it must take it
+ * from here.
+ */
 export async function payOrder(
   id: string,
   input: { paymentMethod: PaymentMethod; customerId?: string },
-): Promise<Order> {
-  const data = await api<{ order: OrderDto }>(`/api/orders/${id}/pay`, {
-    method: 'POST',
-    body: input,
-  });
-  return data.order;
+): Promise<{ order: Order; invoice: InvoiceLink | null }> {
+  const data = await api<{ order: OrderDto; invoice?: InvoiceLink }>(
+    `/api/orders/${id}/pay`,
+    { method: 'POST', body: input },
+  );
+  return { order: data.order, invoice: data.invoice ?? null };
 }
 
 /**

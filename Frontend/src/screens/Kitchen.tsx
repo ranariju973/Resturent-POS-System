@@ -6,6 +6,7 @@ import { usePos } from '../store';
 import { useIsMobile } from '../lib/useViewport';
 import { duration, minutesSince } from '../lib/format';
 import { CARD_SHADOW, FilterPill, LoadState, PageHeading } from '../components/ui';
+import { SkeletonRows } from '../components/motion';
 import { openBoardStream } from '../lib/kitchenApi';
 
 const TYPES = ['All', 'Dine-in', 'Takeaway', 'Delivery'];
@@ -156,6 +157,7 @@ export function Kitchen() {
 
       <LoadState
         loading={state.kdsLoading && state.tickets.length === 0}
+        skeleton={<SkeletonRows count={3} height={110} />}
         error={state.kdsError}
         onRetry={() => void actions.loadBoard()}
       />

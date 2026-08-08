@@ -77,6 +77,16 @@ export const NAV: NavEntry[] = [
     group: 'mgmt',
     blurb: 'Staff accounts, attendance and salary.',
   },
+  {
+    id: 'printer',
+    label: 'Printer Settings',
+    short: 'Printer',
+    // Already in the offline bundle (the Print KOT button uses it), so this
+    // needs no regeneration of src/icons/data.ts.
+    icon: 'lucide:printer',
+    group: 'mgmt',
+    blurb: 'Paper size, receipt details and printers.',
+  },
 ];
 export const SWATCHES = ['#00754A', '#1E3932', '#2b5148', '#cba258', '#8a6a24'];
 

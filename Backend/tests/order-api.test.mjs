@@ -16,6 +16,7 @@ process.env.MONGO_URI = 'mongodb://127.0.0.1:27017/verdant_pos_test';
 process.env.JWT_ACCESS_SECRET = 'a'.repeat(64);
 process.env.JWT_REFRESH_SECRET = 'b'.repeat(64);
 process.env.PIN_PEPPER = 'c'.repeat(64);
+process.env.INVOICE_TOKEN_PEPPER = 'v'.repeat(64);
 process.env.CORS_ORIGIN = 'http://localhost:5173';
 process.env.CLOUDINARY_CLOUD_NAME = 'test';
 process.env.CLOUDINARY_API_KEY = 'test';
@@ -85,6 +86,13 @@ t('approvedBy cannot be forged',
   !ok(createOrderSchema, { type: 'takeaway', items: [line], approvedBy: ITEM }));
 t('orderNo cannot be chosen',
   !ok(createOrderSchema, { type: 'takeaway', items: [line], orderNo: 1 }));
+// The invoice number addresses a bill for all time and the token is the
+// credential guarding it — a client choosing either would be able to mint a
+// link to somebody else's receipt.
+t('invoiceNo cannot be chosen',
+  !ok(createOrderSchema, { type: 'takeaway', items: [line], invoiceNo: 'INV-20260806-0001' }));
+t('the invoice link token cannot be supplied',
+  !ok(createOrderSchema, { type: 'takeaway', items: [line], invoiceTokenHash: 'x'.repeat(64) }));
 
 {
   // Confirm by inspection, not just by rejection.

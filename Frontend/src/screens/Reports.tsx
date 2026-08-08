@@ -19,6 +19,7 @@ import {
   card,
   tableHeaderCell,
 } from '../components/ui';
+import { SkeletonRows } from '../components/motion';
 
 /** Payment method colours, keyed by what the server actually returns. */
 const PAY_COLOR: Record<string, string> = {
@@ -202,6 +203,7 @@ export function Reports() {
 
         <LoadState
           loading={state.repLoading}
+          skeleton={<SkeletonRows count={4} height={80} />}
           error={state.repError}
           onRetry={() => void actions.loadReport()}
         />

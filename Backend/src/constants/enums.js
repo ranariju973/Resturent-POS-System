@@ -209,6 +209,9 @@ export const AUDIT_ACTION = Object.freeze({
   // Reopening a paid month is the one action here that rewrites a settled
   // figure, so it is recorded apart from the adjustment that follows it.
   PAYROLL_UNPAID: 'payroll.unpaid',
+
+  // Receipt layout, printers and the business details printed on a bill.
+  SETTINGS_UPDATE: 'settings.update',
 });
 
 export const AUDIT_ACTION_VALUES = Object.freeze(Object.values(AUDIT_ACTION));

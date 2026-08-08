@@ -16,6 +16,8 @@
  *      fails. The client's only inputs are item ids and quantities.
  */
 import mongoose from 'mongoose';
+import { createHash, randomBytes } from 'node:crypto';
+import { env } from '../config/env.js';
 import {
   ORDER_TYPE_VALUES,
   ORDER_STATUS,
@@ -60,8 +62,34 @@ orderLineSchema.virtual('lineTotalMinor').get(function lineTotal() {
 
 const orderSchema = new mongoose.Schema(
   {
-    /** Human-facing number from the daily sequence. Unique per service day. */
+    /**
+     * Human-facing number from the daily sequence. Resets each service day, so
+     * it is NOT unique across days — yesterday's #41 and today's #41 both
+     * exist. Use `invoiceNo` when a value has to address one specific bill.
+     */
     orderNo: { type: Number, required: true, index: true },
+
+    /**
+     * ── The customer-facing invoice ────────────────────────────────────────
+     * `INV-20260806-0041`. Assigned at creation and unique for all time, which
+     * is what `orderNo` cannot be. Null on orders that predate the feature.
+     */
+    invoiceNo: { type: String, default: null },
+
+    /**
+     * SHA-256 of the invoice link's secret token, peppered from the
+     * environment. Minted at PAYMENT, so an unpaid or voided-before-payment
+     * bill has no shareable link at all.
+     *
+     * The raw token is never stored. It lives in the URL the customer keeps —
+     * a bearer credential — so a raw column would turn any database leak into
+     * every invoice this restaurant has ever issued, names and phones
+     * included. Same reasoning as User.pinHash.
+     *
+     * `select: false` so no ordinary Order.find() in reports or dashboards can
+     * ship it by accident.
+     */
+    invoiceTokenHash: { type: String, default: null, select: false },
 
     type: {
       type: String,
@@ -160,6 +188,14 @@ orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ 'items.menuItem': 1 });
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ createdBy: 1, createdAt: -1 });
+/**
+ * Sparse because every order predating this feature has null, and a plain
+ * unique index would reject the second one. Unique because the invoice number
+ * is what a customer, a receipt and a support query all point at.
+ */
+orderSchema.index({ invoiceNo: 1 }, { unique: true, sparse: true });
+/** The public lookup key. Indexed so an anonymous request is O(1), not a scan. */
+orderSchema.index({ invoiceTokenHash: 1 }, { unique: true, sparse: true });
 // One open order per table at a time — enforced by the database, not by a
 // check-then-write in a controller that two requests can interleave through.
 orderSchema.index(
@@ -247,6 +283,38 @@ orderSchema.pre('validate', function verifyTotals(next) {
 orderSchema.methods.canBeModified = function canBeModified() {
   return this.status === ORDER_STATUS.OPEN;
 };
+
+/**
+ * Format the customer-facing invoice number.
+ *
+ * `day` MUST be the string the counter was keyed on — see
+ * nextSequenceWithDay in Counter.js for why re-reading the clock here is a
+ * once-a-year bug rather than a style preference.
+ *
+ * @param {string} day 'YYYY-MM-DD'
+ * @param {number} seq
+ */
+export const formatInvoiceNo = (day, seq) =>
+  `INV-${day.replaceAll('-', '')}-${String(seq).padStart(4, '0')}`;
+
+/** A fresh link secret. 192 bits — far past anything worth guessing at. */
+export const mintInvoiceToken = () => randomBytes(24).toString('base64url');
+
+/**
+ * Hash a link token for storage and lookup.
+ *
+ * Deterministic SHA-256, NOT bcrypt — and the difference matters. bcrypt salts
+ * randomly, so you cannot look a value up by its hash; every public request
+ * would have to scan the orders collection and compare one by one, which is
+ * both slow and a free denial-of-service. A fast hash is the right choice
+ * *here*, where it would be wrong for a PIN, because the input is 192 bits of
+ * randomness with no dictionary to grind against.
+ *
+ * The pepper means a stolen database alone cannot be reversed even if the
+ * token were ever shortened.
+ */
+export const hashInvoiceToken = (token) =>
+  createHash('sha256').update(`${token}${env.INVOICE_TOKEN_PEPPER}`).digest('hex');
 
 export const Order = mongoose.model('Order', orderSchema);
 export default Order;

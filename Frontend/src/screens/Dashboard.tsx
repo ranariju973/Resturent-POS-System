@@ -4,6 +4,7 @@ import { CONFIG, usePos } from '../store';
 import { clockTime, money, plural } from '../lib/format';
 import { useIsMobile } from '../lib/useViewport';
 import { CARD_SHADOW, LoadState, StatusBadge, card, tableHeaderCell } from '../components/ui';
+import { SkeletonRows } from '../components/motion';
 import { PERMISSIONS, can } from '../lib/permissions';
 import { OrderDetail } from '../components/OrderDetail';
 
@@ -243,6 +244,7 @@ export function Dashboard() {
 
           <LoadState
             loading={state.dashLoading && !dash}
+            skeleton={<SkeletonRows count={4} height={64} />}
             error={state.dashError}
             empty={!state.dashLoading && !state.dashError && recent.length === 0}
             emptyMessage="No orders yet today."

@@ -44,9 +44,23 @@ export const DEFAULT_TAX_RATE = 0;
  */
 export const CASHIER_VOID_WINDOW_MINUTES = 30;
 
+/**
+ * How the restaurant identifies itself on a customer-facing invoice.
+ *
+ * A constant rather than a Settings collection because nothing else in the
+ * app needs it yet, and a one-row collection is a migration and an admin
+ * screen for a value that changes when the business is renamed. Promote it to
+ * the database the day a second location exists.
+ */
+export const RESTAURANT = Object.freeze({
+  name: 'Kimche Restora',
+  tagline: 'Thank you for dining with us',
+});
+
 export default {
   CASHIER_MAX_DISCOUNT_PERCENT,
   CASHIER_MAX_DISCOUNT_MINOR,
   DEFAULT_TAX_RATE,
   CASHIER_VOID_WINDOW_MINUTES,
+  RESTAURANT,
 };

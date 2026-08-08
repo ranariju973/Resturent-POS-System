@@ -19,14 +19,19 @@
  * override PIN, and `approvedBy` records who.
  */
 import mongoose from 'mongoose';
-import { Order } from '../models/Order.js';
+import {
+  Order,
+  formatInvoiceNo,
+  mintInvoiceToken,
+  hashInvoiceToken,
+} from '../models/Order.js';
 import { Ticket } from '../models/Ticket.js';
 import { Table } from '../models/Table.js';
 import { MenuItem } from '../models/MenuItem.js';
 import { Customer, normalizePhone } from '../models/Customer.js';
 import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
-import { nextSequence } from '../models/Counter.js';
+import { nextSequence, nextSequenceWithDay } from '../models/Counter.js';
 import {
   AUDIT_ACTION,
   ORDER_STATUS,
@@ -48,6 +53,7 @@ import { announceNewTicket } from './kitchenController.js';
 import { emitEvent, EVENTS } from '../utils/eventBus.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { toMajor, percentOf } from '../utils/money.js';
+import { buildInvoiceUrl } from '../utils/invoiceLink.js';
 import { logger } from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +63,8 @@ import { logger } from '../utils/logger.js';
 const publicOrder = (order) => ({
   id: String(order._id),
   orderNo: order.orderNo,
+  // Assigned at creation, so the till can print a bill before payment.
+  invoiceNo: order.invoiceNo ?? null,
   type: order.type,
   status: order.status,
   table: order.table ? String(order.table) : null,
@@ -272,7 +280,9 @@ export const createOrder = asyncHandler(async (req, res) => {
 
   const result = await withTransaction(async (session) => {
     const lines = await priceLines(requestedItems, session);
-    const orderNo = await nextSequence('order', { session });
+    // The day comes back with the sequence so the invoice number and the
+    // counter that produced it cannot disagree across a midnight boundary.
+    const { seq: orderNo, day } = await nextSequenceWithDay('order', { session });
 
     // Resolve the customer inside the transaction, so a record is never left
     // behind by an order that then failed to save.
@@ -280,6 +290,10 @@ export const createOrder = asyncHandler(async (req, res) => {
 
     const order = new Order({
       orderNo,
+      // Assigned here rather than at payment so the number is stable from the
+      // moment the bill exists — a reprint or a support call can quote it. The
+      // shareable LINK is a separate thing, minted at payment.
+      invoiceNo: formatInvoiceNo(day, orderNo),
       type,
       table: table?._id ?? null,
       customer: resolvedCustomerId ?? null,
@@ -529,10 +543,27 @@ export const payOrder = asyncHandler(async (req, res) => {
     order.customer = customerId;
   }
 
+  /**
+   * Minted here rather than at creation, and the reason is not stylistic.
+   *
+   * Only the HASH is stored, so a later request can never reconstruct the raw
+   * token — this is the one moment it exists in memory, and the one response
+   * that can carry it. Doing it at payment also means a bill voided before it
+   * was ever settled has no shareable link at all, which is exactly right.
+   */
+  const invoiceToken = mintInvoiceToken();
+
+  // Read before the response is built. `order.customer` is an id, and the
+  // client may only ever have held a masked form of the number.
+  const customerPhone = order.customer
+    ? (await Customer.findById(order.customer).select('+phoneNormalized phone'))?.phone ?? null
+    : null;
+
   await withTransaction(async (session) => {
     order.status = ORDER_STATUS.PAID;
     order.paymentMethod = paymentMethod;
     order.paidAt = new Date();
+    order.invoiceTokenHash = hashInvoiceToken(invoiceToken);
     await order.save({ session });
 
     /**
@@ -582,7 +613,26 @@ export const payOrder = asyncHandler(async (req, res) => {
     req,
   );
 
-  return sendSuccess(res, { order: publicOrder(order) });
+  return sendSuccess(res, {
+    order: publicOrder(order),
+    // The share link, returned once. The client keeps it for the WhatsApp
+    // hand-off; the server cannot rebuild it after this response.
+    invoice: {
+      invoiceNo: order.invoiceNo,
+      url: buildInvoiceUrl(order.invoiceNo, invoiceToken),
+      /**
+       * The customer's real number, so the till can hand the receipt over.
+       *
+       * The suggestion endpoint masks phone numbers on purpose — it is a
+       * prefix search and an unmasked one would let anyone walk the customer
+       * list. That protection is about SEARCH RESULTS. Here the bill is
+       * already settled, the caller holds `pos:create_order`, and they need
+       * the number to send the receipt they just took payment for. Withholding
+       * it would mean a returning customer can never be sent their own bill.
+       */
+      customerPhone: customerPhone ?? null,
+    },
+  });
 });
 
 // ---------------------------------------------------------------------------

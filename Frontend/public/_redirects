@@ -1,0 +1,9 @@
+# Netlify / Cloudflare Pages SPA fallback.
+#
+# This app has no router library: it reads window.location itself, which means
+# the browser must be handed index.html for a path the static host has no file
+# for. Without this rule, /invoice/INV-20260806-0041-<token> — the link sent to
+# every customer — returns 404 before a single line of JavaScript runs.
+#
+# 200, not 301: the URL must stay as the customer received it.
+/*    /index.html   200

@@ -4,6 +4,7 @@ import { CONFIG, SHOW_ALL, usePos } from '../store';
 import type { OrderType } from '../data/types';
 import { CURRENCY, money, plural } from '../lib/format';
 import { useIsMobile } from '../lib/useViewport';
+import { Spinner, SkeletonGrid, motion, AnimatePresence, listRow } from '../components/motion';
 import type { ReactNode } from 'react';
 import {
   CARD_SHADOW,
@@ -107,6 +108,17 @@ export function Billing() {
             : null;
 
   const canGenerate = !blocker && !state.checkoutPending;
+
+  /**
+   * Printing needs an order — either one that is open, or the one just
+   * settled. A cart alone is not enough: nothing has an order number yet.
+   */
+  const printable = Boolean(state.activeOrder || state.lastPrintable);
+  const printTitle = printable
+    ? 'Print a thermal receipt'
+    : state.cart.length > 0
+      ? 'Open the bill first — the kitchen ticket is created with it'
+      : 'Add items first';
   const tableName = state.tables.find((t) => t.id === state.orderTable)?.name ?? '';
 
   return (
@@ -301,6 +313,7 @@ export function Billing() {
 
           <LoadState
             loading={state.menuLoading}
+            skeleton={<SkeletonGrid count={isMobile ? 6 : 10} minWidth={isMobile ? 148 : 200} />}
             error={state.menuError}
             empty={!state.menuLoading && !state.menuError && products.length === 0}
             emptyMessage={
@@ -654,9 +667,23 @@ export function Billing() {
             gap: 12,
           }}
         >
+          {/*
+            AnimatePresence is what makes a removed line fade out. Without it a
+            row is gone from the DOM the instant the array changes, so there is
+            nothing left to transition — this is the case CSS genuinely cannot
+            cover, and the reason the library is here at all.
+
+            `layout` slides the rows below a deletion up into the gap rather
+            than letting them snap.
+          */}
+          <AnimatePresence initial={false}>
           {lines.map(({ line, item, lineTotal }) => (
-            <div
+            <motion.div
               key={line.id}
+              initial={listRow.initial}
+              animate={listRow.animate}
+              exit={listRow.exit}
+              transition={listRow.transition}
               style={{
                 border: '1px solid rgba(0,0,0,0.07)',
                 borderRadius: 12,
@@ -665,6 +692,10 @@ export function Billing() {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 10,
+                // Hold natural height. Without this the column compresses the
+                // rows to fit rather than letting the container scroll, which
+                // is what made a long cart look unevenly spaced.
+                flexShrink: 0,
               }}
             >
               <div
@@ -786,8 +817,9 @@ export function Billing() {
                   }}
                 />
               ) : null}
-            </div>
+            </motion.div>
           ))}
+          </AnimatePresence>
 
           {state.cart.length === 0 ? (
             <div
@@ -834,9 +866,22 @@ export function Billing() {
           ) : null}
         </div>
 
+        {/*
+          The footer is pinned, but it is not allowed to grow without limit.
+          Totals, the discount row, the action buttons and the post-payment
+          share panel can together outgrow the panel on a short window, and
+          because this is `flexShrink: 0` the cart list above is what gives way
+          — down to a couple of visible rows.
+
+          Capping it at 62% and letting it scroll internally means the item
+          list always keeps roughly a third of the panel, whatever is stacked
+          down here.
+        */}
         <div
           style={{
             flexShrink: 0,
+            maxHeight: '62%',
+            overflowY: 'auto',
             borderTop: '1px solid #edebe9',
             background: '#ffffff',
             padding: 16,
@@ -1064,9 +1109,11 @@ export function Billing() {
                         ...generateButton,
                         flex: 1,
                         textTransform: 'capitalize',
+                        gap: 7,
                         opacity: state.checkoutPending ? 0.6 : 1,
                       }}
                     >
+                      {state.checkoutPending ? <Spinner size={14} /> : null}
                       {method}
                     </button>
                   ))}
@@ -1098,7 +1145,11 @@ export function Billing() {
                 onClick={() => void actions.generateBill()}
                 style={generateButton}
               >
-                <Icon icon="lucide:file-check-2" size={17} />
+                {state.checkoutPending ? (
+                  <Spinner size={16} />
+                ) : (
+                  <Icon icon="lucide:file-check-2" size={17} />
+                )}
                 {state.checkoutPending ? 'Opening…' : 'Generate Bill'}
               </button>
             ) : (
@@ -1119,81 +1170,139 @@ export function Billing() {
               </button>
             )}
 
+            {/*
+              Both print a real thermal receipt now.
+
+              They are DISABLED until an order exists, which is the fix for a
+              button that previously fired its toast on an empty cart. Without
+              an order there is no order number and no kitchen ticket, so a KOT
+              printed here would put food in the kitchen that the board knows
+              nothing about.
+            */}
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 type="button"
                 className="press hv-green-fill"
-                onClick={() => actions.flash('Kitchen ticket sent to printer')}
-                style={outlineGreenButton}
+                disabled={!printable || state.printBusy}
+                title={printTitle}
+                onClick={() => void actions.printKot()}
+                style={{
+                  ...outlineGreenButton,
+                  ...(printable && !state.printBusy ? null : { opacity: 0.45, cursor: 'not-allowed' }),
+                }}
               >
-                <Icon icon="lucide:printer" size={15} />
+                {state.printBusy ? <Spinner size={14} /> : <Icon icon="lucide:printer" size={15} />}
                 Print KOT
               </button>
+              {/*
+                Works BEFORE payment too — an unpaid bill is a normal thing to
+                hand someone, and the template marks it UNPAID. Previously this
+                required a settled order, so a customer could not be shown what
+                they owed before paying it.
+              */}
               <button
                 type="button"
                 className="press hv-green-fill"
-                onClick={() => actions.flash('Bill sent to receipt printer')}
-                style={outlineGreenButton}
+                disabled={!printable || state.printBusy}
+                title={printTitle}
+                onClick={() => void actions.printBill()}
+                style={{
+                  ...outlineGreenButton,
+                  ...(printable && !state.printBusy ? null : { opacity: 0.45, cursor: 'not-allowed' }),
+                }}
               >
-                <Icon icon="lucide:receipt-text" size={15} />
+                {state.printBusy ? (
+                  <Spinner size={14} />
+                ) : (
+                  <Icon icon="lucide:receipt-text" size={15} />
+                )}
                 Print Bill
               </button>
             </div>
 
-            <button
-              type="button"
-              className="press hv-green"
-              onClick={() => actions.patch({ sendOpen: !state.sendOpen })}
-              style={{
-                width: '100%',
-                padding: '11px 18px',
-                borderRadius: 50,
-                border: '1px solid #d6dbde',
-                background: '#ffffff',
-                color: 'rgba(0,0,0,0.87)',
-                fontSize: 13,
-                fontWeight: 700,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 7,
-              }}
-            >
-              <Icon icon="lucide:send" size={15} />
-              Send Invoice
-              <Icon
-                icon={state.sendOpen ? 'lucide:chevron-up' : 'lucide:chevron-down'}
-                size={15}
-                color="rgba(0,0,0,0.45)"
-              />
-            </button>
+            {/*
+              The share panel. It only exists once a bill is settled, because
+              the link only exists then — the server mints the token at payment
+              and keeps only its hash, so there is nothing to share before and
+              no way to rebuild it after.
+            */}
+            {/*
+              Two rows, not three blocks.
+              This sits under a cart, a discount control and a totals block in
+              a 400px column, so it earns its height: row one states what was
+              settled, row two sends it. The collapsible toggle went with the
+              third block — a panel that only appears after payment and
+              disappears on the next order does not also need hiding.
+            */}
+            {state.lastSettled ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  padding: 10,
+                  borderRadius: 10,
+                  background: '#f4faf8',
+                  border: '1px solid #bfe0d4',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: 'rgba(0,0,0,0.45)',
+                  }}
+                >
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {state.lastSettled.invoiceNo}
+                    {state.lastSettled.customerName ? ` · ${state.lastSettled.customerName}` : ''}
+                  </span>
+                  <span style={{ color: '#00754A', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                    {money(state.lastSettled.total)}
+                  </span>
 
-            {state.sendOpen ? (
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  className="press hv-green"
-                  onClick={() => {
-                    actions.patch({ sendOpen: false });
-                    actions.flash('Invoice sent on WhatsApp');
-                  }}
-                  style={sendOptionButton}
-                >
-                  <Icon icon="lucide:message-circle" size={15} />
-                  WhatsApp
-                </button>
-                <button
-                  type="button"
-                  className="press hv-green"
-                  onClick={() => {
-                    actions.patch({ sendOpen: false });
-                    actions.flash('Invoice sent by SMS');
-                  }}
-                  style={sendOptionButton}
-                >
-                  <Icon icon="lucide:message-square" size={15} />
-                  SMS
-                </button>
+                </span>
+
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    className="press hv-green"
+                    title={
+                      state.lastSettled.phone
+                        ? `Send to ${state.lastSettled.phone}`
+                        : 'No phone on this bill'
+                    }
+                    onClick={actions.shareOnWhatsApp}
+                    disabled={!state.lastSettled.phone}
+                    style={{
+                      ...shareButton,
+                      ...(state.lastSettled.phone
+                        ? { border: '1px solid #00754A', background: '#00754A', color: '#ffffff' }
+                        : { opacity: 0.45 }),
+                    }}
+                  >
+                    <Icon
+                      icon="lucide:message-circle"
+                      size={14}
+                      color={state.lastSettled.phone ? '#ffffff' : 'rgba(0,0,0,0.45)'}
+                    />
+                    WhatsApp
+                  </button>
+                  <button
+                    type="button"
+                    className="press hv-green"
+                    title="Copy the invoice link"
+                    onClick={actions.copyInvoiceLink}
+                    style={shareButton}
+                  >
+                    <Icon icon="lucide:link" size={14} />
+                    Copy
+                  </button>
+                </div>
               </div>
             ) : null}
           </div>
@@ -1516,17 +1625,21 @@ const outlineGreenButton: CSSProperties = {
   gap: 7,
 };
 
-const sendOptionButton: CSSProperties = {
+/** The two share actions. Tighter than the panel buttons above them — this
+ *  row sits below an already-tall column and only has to be tappable. */
+const shareButton: CSSProperties = {
   flex: 1,
-  padding: '10px 14px',
+  minWidth: 0,
+  padding: '9px 12px',
   borderRadius: 50,
   border: '1px solid #d6dbde',
-  background: '#f9f9f9',
+  background: '#ffffff',
   color: 'rgba(0,0,0,0.87)',
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 700,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 7,
+  gap: 6,
+  whiteSpace: 'nowrap',
 };

@@ -25,6 +25,7 @@ import {
   primaryPill,
   tableHeaderCell,
 } from '../components/ui';
+import { SkeletonRows } from '../components/motion';
 import { EmployeeAttendance } from './employeeAttendance';
 import { EmployeeSalary } from './employeeSalary';
 import {
@@ -244,6 +245,7 @@ export function Employees() {
 
             <LoadState
               loading={state.empLoading}
+              skeleton={<SkeletonRows count={5} height={64} />}
               error={state.empLoadError}
               empty={!state.empLoading && !state.empLoadError && list.length === 0}
               emptyMessage={

@@ -44,8 +44,36 @@ export function serviceDayKey(date = new Date()) {
  *        Ticket together and must not half-commit).
  * @returns {Promise<number>}
  */
-export async function nextSequence(name, { daily = true, start = 1, session } = {}) {
-  const key = daily ? `${name}:${serviceDayKey()}` : name;
+export async function nextSequence(name, options = {}) {
+  const { seq } = await nextSequenceWithDay(name, options);
+  return seq;
+}
+
+/**
+ * The same sequence, plus the service day the counter was keyed on.
+ *
+ * ── Why the day has to come back out ───────────────────────────────────────
+ * An invoice number embeds the date: `INV-20260806-0041`. The obvious way to
+ * build it is to format the order's `createdAt` — and that is a bug that fires
+ * once a year, at 23:59:59.
+ *
+ * `serviceDayKey()` is read HERE to pick the counter document. A caller that
+ * separately formats its own `new Date()` a few milliseconds later can land on
+ * the next day, producing `INV-20260807-0041` from the `order:2026-08-06`
+ * counter — and tomorrow's genuine #41 then collides on the unique index.
+ *
+ * Returning the exact string this function used makes the number and the
+ * counter that produced it the same day by construction, so the two cannot
+ * disagree no matter where the clock falls.
+ *
+ * @param {string} name
+ * @param {object} [options] Same as nextSequence.
+ * @returns {Promise<{ seq: number, day: string }>} `day` is 'YYYY-MM-DD'.
+ */
+export async function nextSequenceWithDay(name, { daily = true, start = 1, session } = {}) {
+  // Read once. Everything below uses this value, never a fresh clock read.
+  const day = serviceDayKey();
+  const key = daily ? `${name}:${day}` : name;
 
   const doc = await Counter.findByIdAndUpdate(
     key,
@@ -53,7 +81,7 @@ export async function nextSequence(name, { daily = true, start = 1, session } = 
     { new: true, upsert: true, setDefaultsOnInsert: true, session },
   );
 
-  return doc.seq + (start - 1);
+  return { seq: doc.seq + (start - 1), day };
 }
 
 export { Counter };

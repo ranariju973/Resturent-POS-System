@@ -32,6 +32,8 @@ import customerRoutes from './src/routes/customers.js';
 import dashboardRoutes from './src/routes/dashboard.js';
 import reportRoutes from './src/routes/reports.js';
 import employeeRoutes from './src/routes/employees.js';
+import invoiceRoutes from './src/routes/invoice.js';
+import settingsRoutes from './src/routes/settings.js';
 import attendanceRoutes from './src/routes/attendance.js';
 import payrollRoutes from './src/routes/payroll.js';
 import auditRoutes from './src/routes/audit.js';
@@ -170,6 +172,9 @@ app.use('/api/customers', customerRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/employees', employeeRoutes);
+// Public: a customer opening a link has no session. See routes/invoice.js.
+app.use('/api/invoice', invoiceRoutes);
+app.use('/api/settings', settingsRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/audit-logs', auditRoutes);

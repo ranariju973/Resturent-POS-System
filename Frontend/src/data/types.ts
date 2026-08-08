@@ -18,7 +18,8 @@ export type ScreenId =
   | 'kitchen'
   | 'customers'
   | 'reports'
-  | 'employees';
+  | 'employees'
+  | 'printer';
 
 export interface NavEntry {
   id: ScreenId;

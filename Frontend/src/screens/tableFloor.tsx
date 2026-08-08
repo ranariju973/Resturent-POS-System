@@ -19,6 +19,7 @@ import { PERMISSIONS, can } from '../lib/permissions';
 import { duration, minutesSince, money } from '../lib/format';
 import { useIsMobile } from '../lib/useViewport';
 import { CARD_SHADOW, LoadState, PageHeading, card, primaryPill } from '../components/ui';
+import { SkeletonGrid } from '../components/motion';
 
 /** Occupied tables past this many minutes get a red elapsed figure. */
 const LATE_MINUTES = 45;
@@ -165,6 +166,7 @@ export function TableFloor() {
 
         <LoadState
           loading={state.tablesLoading}
+          skeleton={<SkeletonGrid count={isMobile ? 6 : 10} minWidth={isMobile ? 145 : 200} height={150} />}
           error={state.tablesError}
           empty={!state.tablesLoading && !state.tablesError && visible.length === 0}
           emptyMessage={

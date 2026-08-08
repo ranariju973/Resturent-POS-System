@@ -25,6 +25,7 @@ import {
   primaryPill,
   tableHeaderCell,
 } from '../components/ui';
+import { SkeletonRows } from '../components/motion';
 import type { AttendanceStatus } from '../data/types';
 
 const STATUSES: Array<{ id: AttendanceStatus; label: string; bg: string; fg: string }> = [
@@ -203,6 +204,7 @@ export function EmployeeAttendance() {
 
       <LoadState
         loading={state.attLoading}
+        skeleton={<SkeletonRows count={5} height={64} />}
         error={state.attLoading ? '' : state.attError}
         empty={!state.attLoading && !state.attError && state.attRows.length === 0}
         emptyMessage="No active cashier or kitchen staff to mark. Add an employee first."

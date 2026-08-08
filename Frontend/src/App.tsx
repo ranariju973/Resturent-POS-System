@@ -5,6 +5,7 @@ import { Billing } from './screens/Billing';
 import { Customers } from './screens/Customers';
 import { Dashboard } from './screens/Dashboard';
 import { Employees } from './screens/Employees';
+import { PrinterSettings } from './screens/PrinterSettings';
 import { Kitchen } from './screens/Kitchen';
 import { Login } from './screens/Login';
 import { MenuManagement } from './screens/MenuManagement';
@@ -12,6 +13,7 @@ import { Reports } from './screens/Reports';
 import { TableManagement } from './screens/TableManagement';
 import { usePos } from './store';
 import { canViewScreen } from './lib/permissions';
+import { motion, AnimatePresence, screenFade } from './components/motion';
 
 const SCREENS = {
   dashboard: Dashboard,
@@ -22,6 +24,7 @@ const SCREENS = {
   customers: Customers,
   reports: Reports,
   employees: Employees,
+  printer: PrinterSettings,
 } as const;
 
 export function App() {
@@ -88,7 +91,29 @@ export function App() {
       {state.authBooting ? (
         <Splash />
       ) : state.user ? (
-        <AppShell>{allowed ? <Screen /> : <NoAccess />}</AppShell>
+        <AppShell>
+          {/*
+            Keyed on the active screen so switching tabs cross-fades rather
+            than snapping. `mode="wait"` lets the outgoing screen finish before
+            the next mounts — two full screens overlapping mid-fade looks like
+            a glitch, and on a POS a glitch reads as a fault.
+
+            Deliberately just opacity: sliding a whole till screen sideways is
+            the kind of motion that stops being charming on the hundredth use.
+          */}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={allowed ? state.active : 'no-access'}
+              initial={screenFade.initial}
+              animate={screenFade.animate}
+              exit={screenFade.exit}
+              transition={screenFade.transition}
+              style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+            >
+              {allowed ? <Screen /> : <NoAccess />}
+            </motion.div>
+          </AnimatePresence>
+        </AppShell>
       ) : (
         <Login />
       )}

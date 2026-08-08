@@ -82,6 +82,8 @@ export interface OrderLineDto {
 export interface OrderDto {
   id: string;
   orderNo: number;
+  /** Assigned at creation, so a bill can be printed before payment. */
+  invoiceNo: string | null;
   type: OrderType;
   status: 'open' | 'paid' | 'voided';
   table: string | null;

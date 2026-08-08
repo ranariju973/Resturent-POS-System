@@ -41,6 +41,8 @@ const EXEMPTIONS = {
     'Deliberately open: an expired access token must not prevent ending a session.',
   'kitchen.js GET /stream':
     'EventSource cannot set headers. Verifies a 60s single-purpose token in-handler and re-checks kitchen:view against the database.',
+  'invoice.js GET /:slug':
+    'A customer opening a receipt link has no session and never will. Authenticated by a 192-bit token in the URL, hashed at rest; the response is a separate serialiser carrying no staff identity, no internal ids and no phone number.',
 };
 
 const files = fs.readdirSync(ROUTES_DIR).filter((f) => f.endsWith('.js'));

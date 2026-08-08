@@ -79,6 +79,17 @@ export const PERMISSIONS = Object.freeze({
   // Administration
   USER_MANAGE: 'user:manage',
   AUDIT_VIEW: 'audit:view',
+
+  /**
+   * Operational configuration — receipt layout, printers, business details.
+   *
+   * Deliberately NOT folded into `user:manage`. That grant opens staff
+   * records, salaries and PINs; printer setup is something a shift manager
+   * could plausibly be trusted with. Sharing one permission between them makes
+   * "can configure the printer, cannot see wages" impossible to express, and
+   * the catalogue would no longer describe what the system actually does.
+   */
+  SETTINGS_MANAGE: 'settings:manage',
 });
 
 export const PERMISSION_VALUES = Object.freeze(Object.values(PERMISSIONS));

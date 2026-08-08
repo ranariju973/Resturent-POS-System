@@ -334,3 +334,85 @@ body {
 .cells > * {
   overflow-wrap: anywhere;
 }
+
+/* ---------------------------------------------------------------------------
+   Printing — the customer's invoice
+   --------------------------------------------------------------------------- */
+
+/*
+ * A phone's print dialog offers "Save as PDF", which is how a customer gets a
+ * downloadable receipt without this app shipping a PDF library or the server
+ * storing a single file.
+ *
+ * What the print view removes: the page background (which costs ink and means
+ * nothing on paper), the card shadow, and the Print button itself — a
+ * screenshot of a receipt with a Print button on it looks like a screenshot,
+ * not a receipt.
+ */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff;
+  }
+
+  .invoice-sheet {
+    max-width: 100%;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+  }
+
+  /* Keep a line item and its price together across a page break. */
+  .invoice-sheet > div > div {
+    break-inside: avoid;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Skeleton placeholders
+   --------------------------------------------------------------------------- */
+
+/*
+ * A sweep of light across a grey block, standing in for content that has not
+ * arrived. Kept in CSS rather than driven by JS: this animates on potentially
+ * dozens of blocks at once while a list loads, and a compositor-only
+ * background-position sweep costs nothing per element.
+ *
+ * `prefers-reduced-motion` stops the sweep entirely — for someone with
+ * vestibular sensitivity a shimmering grid is genuinely unpleasant, and the
+ * grey blocks alone still say "loading".
+ */
+@keyframes skeletonSweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #eceff1 25%, #f6f8f9 50%, #eceff1 75%);
+  background-size: 200% 100%;
+  animation: skeletonSweep 1.4s ease-in-out infinite;
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+
+  /* Entry animations become instant rather than removed, so nothing that
+     relies on an animation finishing is left invisible. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

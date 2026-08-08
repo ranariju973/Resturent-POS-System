@@ -74,7 +74,7 @@ t(`all ${referenced.length} screen guards resolve to a defined key`, dangling.le
 
 console.log('\n--- every screen is guarded ---');
 const SCREENS = [
-  'dashboard', 'billing', 'menu', 'tables', 'kitchen', 'customers', 'reports', 'employees',
+  'dashboard', 'billing', 'menu', 'tables', 'kitchen', 'customers', 'reports', 'employees', 'printer',
 ];
 const guarded = SCREENS.filter((s) => new RegExp(`^\\s*${s}:`, 'm').test(screenBlock));
 t(`${SCREENS.length} screens declared, ${guarded.length} guarded`, guarded.length === SCREENS.length,

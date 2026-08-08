@@ -16,6 +16,7 @@ import { Icon } from '../icons/Icon';
 import { money } from '../lib/format';
 import { useIsMobile } from '../lib/useViewport';
 import { LoadState, StatusBadge, card, tableHeaderCell } from '../components/ui';
+import { SkeletonRows } from '../components/motion';
 
 const GRID = '1.3fr 0.9fr 0.8fr 0.8fr 0.8fr 0.9fr 0.7fr 150px';
 
@@ -193,6 +194,7 @@ export function EmployeeSalary() {
 
       <LoadState
         loading={state.payLoading}
+        skeleton={<SkeletonRows count={4} height={72} />}
         error={state.payError}
         empty={!state.payLoading && !state.payError && state.payRows.length === 0}
         emptyMessage="No staff on payroll. Add an employee and set their monthly salary."

@@ -151,4 +151,22 @@ export const lookupLimiter = rateLimit({
   keyGenerator: (req) => (req.user?.id ? `user:${req.user.id}` : ipKeyGenerator(req)),
 });
 
-export default { loginLimiter, refreshLimiter, apiLimiter, lookupLimiter };
+/**
+ * Public invoice links.
+ *
+ * The token in the URL is the real defence — 192 bits is not walked, whatever
+ * the budget. This is depth: it bounds how fast someone can probe for a lucky
+ * hit, and it bounds what a scraper costs the server.
+ *
+ * Keyed by IP because the caller is a customer with no session by definition.
+ * Generous enough that a family opening the same receipt on four phones behind
+ * one router never notices it.
+ */
+export const invoiceLimiter = rateLimit({
+  ...baseOptions,
+  windowMs: 60 * 60 * 1000,
+  max: 120,
+  keyGenerator: (req) => ipKeyGenerator(req),
+});
+
+export default { loginLimiter, refreshLimiter, apiLimiter, lookupLimiter, invoiceLimiter };

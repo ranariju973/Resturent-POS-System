@@ -46,7 +46,27 @@ const schema = z
     // re-set afterwards, so treat it as permanent once staff exist.
     PIN_PEPPER: z.string().min(32, 'PIN_PEPPER must be at least 32 characters'),
 
+    // Peppers the invoice-link token hash (see src/models/Order.js). Rotating
+    // this invalidates every invoice link already sent to a customer, so treat
+    // it as permanent once a single bill has been shared.
+    INVOICE_TOKEN_PEPPER: z
+      .string()
+      .min(32, 'INVOICE_TOKEN_PEPPER must be at least 32 characters'),
+
     CORS_ORIGIN: z.string().min(1, 'CORS_ORIGIN is required'),
+
+    /**
+     * Where the FRONTEND lives — the origin a customer's browser will open.
+     *
+     * Not the backend's own address: in a split deployment the two differ, and
+     * this is the one printed into a WhatsApp message. Optional here because
+     * development derives it from CORS_ORIGIN; production refuses to boot
+     * without it (see below).
+     */
+    PUBLIC_APP_URL: z
+      .string()
+      .url('PUBLIC_APP_URL must be a full URL, e.g. https://pos.example.com')
+      .optional(),
 
     CLOUDINARY_CLOUD_NAME: z.string().min(1, 'CLOUDINARY_CLOUD_NAME is required'),
     CLOUDINARY_API_KEY: z.string().min(1, 'CLOUDINARY_API_KEY is required'),
@@ -66,7 +86,19 @@ const schema = z
   .refine((e) => e.PIN_PEPPER !== e.JWT_ACCESS_SECRET && e.PIN_PEPPER !== e.JWT_REFRESH_SECRET, {
     message: 'PIN_PEPPER must be different from the JWT secrets',
     path: ['PIN_PEPPER'],
-  });
+  })
+  // Same reasoning as the PIN pepper: one leaked secret must not compromise a
+  // second, unrelated hash.
+  .refine(
+    (e) =>
+      e.INVOICE_TOKEN_PEPPER !== e.PIN_PEPPER &&
+      e.INVOICE_TOKEN_PEPPER !== e.JWT_ACCESS_SECRET &&
+      e.INVOICE_TOKEN_PEPPER !== e.JWT_REFRESH_SECRET,
+    {
+      message: 'INVOICE_TOKEN_PEPPER must be different from PIN_PEPPER and the JWT secrets',
+      path: ['INVOICE_TOKEN_PEPPER'],
+    },
+  );
 
 const parsed = schema.safeParse(process.env);
 
@@ -99,9 +131,30 @@ if (isProd && corsOrigins.some((o) => o.includes('localhost') || o === '*')) {
   process.exit(1);
 }
 
+/**
+ * The public origin, without a trailing slash so URL building is a plain join.
+ *
+ * Falls back to the first CORS origin, which in development is already the
+ * Vite dev server — so a developer needs no new configuration. The fallback is
+ * deliberately NOT allowed in production: guessing the origin would silently
+ * send customers to the wrong domain, and nobody would notice until one of
+ * them complained that their receipt link was broken.
+ */
+const publicAppUrl = (raw.PUBLIC_APP_URL ?? corsOrigins[0] ?? '').replace(/\/+$/, '');
+
+if (isProd && !raw.PUBLIC_APP_URL) {
+  process.stderr.write(
+    `\nRefusing to start: PUBLIC_APP_URL must be set explicitly while NODE_ENV=production.\n` +
+      `Invoice links are printed into messages sent to customers; deriving the origin\n` +
+      `from CORS_ORIGIN would quietly point them at the wrong host.\n\n`,
+  );
+  process.exit(1);
+}
+
 export const env = Object.freeze({
   ...raw,
   corsOrigins,
+  publicAppUrl,
   isProd,
   isDev: raw.NODE_ENV === 'development',
   isTest: raw.NODE_ENV === 'test',

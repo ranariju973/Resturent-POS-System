@@ -154,7 +154,9 @@ export function EmployeeModal() {
       <ModalActions
         onCancel={actions.closeModal}
         onSave={() => void actions.saveEmployee()}
-        saveLabel={state.empSaving ? 'Saving…' : adding ? 'Add employee' : 'Save changes'}
+        busy={state.empSaving}
+        busyLabel="Saving…"
+        saveLabel={adding ? 'Add employee' : 'Save changes'}
       />
     </ModalOverlay>
   );
@@ -200,7 +202,9 @@ export function EmployeePinModal() {
       <ModalActions
         onCancel={actions.closeModal}
         onSave={() => void actions.saveEmployeePin()}
-        saveLabel={state.empSaving ? 'Saving…' : 'Set PIN'}
+        busy={state.empSaving}
+        busyLabel="Saving…"
+        saveLabel="Set PIN"
       />
     </ModalOverlay>
   );
@@ -250,7 +254,9 @@ export function EmployeeDeleteModal() {
       <ModalActions
         onCancel={actions.closeModal}
         onSave={() => void actions.deleteEmployee()}
-        saveLabel={state.empSaving ? 'Removing…' : 'Remove'}
+        busy={state.empSaving}
+        busyLabel="Removing…"
+        saveLabel="Remove"
         destructive
       />
     </ModalOverlay>
