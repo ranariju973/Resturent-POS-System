@@ -1931,16 +1931,16 @@ function usePosState() {
        * not a failure to work around.
        */
       deleteTable: async (id: string) => {
-        const s = ref.current;
         // Scoped to this id: the delete control lives on every tile, so a
         // shared boolean would spin the whole floor.
         patch({ tblBusyId: id });
         try {
           await tablesApi.deleteTable(id);
+          // ref.current, not the pre-request `s` — see transferTable.
           patch({
             tblBusyId: null,
-            tables: s.tables.filter((t) => t.id !== id),
-            selTable: s.selTable === id ? null : s.selTable,
+            tables: ref.current.tables.filter((t) => t.id !== id),
+            selTable: ref.current.selTable === id ? null : ref.current.selTable,
             modal: null,
           });
           flash('Table removed');
@@ -1975,9 +1975,10 @@ function usePosState() {
         patch({ tblBusyId: target.id });
         try {
           const table = await tablesApi.releaseTable(target.id);
+          // ref.current, not the pre-request `s` — see transferTable.
           patch({
             tblBusyId: null,
-            tables: s.tables.map((t) => (t.id === table.id ? table : t)),
+            tables: ref.current.tables.map((t) => (t.id === table.id ? table : t)),
           });
           flash(`${target.name} is free`);
         } catch (err) {
@@ -1996,9 +1997,13 @@ function usePosState() {
         patch({ tblBusyId: destId });
         try {
           const { source, target } = await tablesApi.transferTable(src.id, destId);
+          // Rebuilt from ref.current, NOT from the `s` captured above: the
+          // floor is live (the SSE stream and other terminals both write to
+          // it), so mapping over a pre-request snapshot would silently revert
+          // every table that changed while this request was in flight.
           patch({
             tblBusyId: null,
-            tables: s.tables.map((t) =>
+            tables: ref.current.tables.map((t) =>
               t.id === source.id ? source : t.id === target.id ? target : t,
             ),
             selTable: destId,
