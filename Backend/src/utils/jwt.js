@@ -203,16 +203,35 @@ export const REFRESH_COOKIE = 'vp_rt';
  *
  *   httpOnly  JavaScript cannot read it, so XSS cannot exfiltrate the session.
  *   secure    HTTPS only. Off in development, where there is no TLS.
- *   sameSite  'strict' — the cookie is never attached to a cross-site request,
- *             which is what makes CSRF against /refresh a non-issue.
+ *   sameSite  Depends on how the app is deployed — see below.
  *   path      scoped to the auth routes, so it is not sent on every API call
  *             it has no business being attached to.
+ *
+ * ── Why sameSite differs by environment ────────────────────────────────────
+ * In development the frontend is served by Vite, which proxies /api to this
+ * server, so browser and API share an origin and 'strict' costs nothing.
+ *
+ * In production the frontend is on Vercel and this API is on Render — two
+ * different sites. A 'strict' cookie is withheld on every cross-site request,
+ * so the silent re-auth on page load never receives it and the user is
+ * logged out by a refresh. 'none' is what allows a split deployment to work.
+ *
+ * The trade-off is real: 'strict' was this cookie's CSRF defence. What still
+ * stands in its place is httpOnly (an attacker cannot read the rotated
+ * token), the '/api/auth' path scope (it is never attached to data routes),
+ * and the exact-match CORS allow-list in app.js, which refuses to reflect an
+ * arbitrary Origin and so denies the attacker's page the response body. The
+ * residual exposure is a forced token rotation, not session theft.
+ *
+ * If both halves ever move behind one origin, change this back to 'strict'.
  */
+const REFRESH_COOKIE_SAME_SITE = env.isProd ? 'none' : 'strict';
+
 export function refreshCookieOptions(expiresAt) {
   return {
     httpOnly: true,
     secure: env.isProd,
-    sameSite: 'strict',
+    sameSite: REFRESH_COOKIE_SAME_SITE,
     path: '/api/auth',
     expires: expiresAt,
   };
@@ -223,7 +242,7 @@ export function clearRefreshCookieOptions() {
   return {
     httpOnly: true,
     secure: env.isProd,
-    sameSite: 'strict',
+    sameSite: REFRESH_COOKIE_SAME_SITE,
     path: '/api/auth',
   };
 }

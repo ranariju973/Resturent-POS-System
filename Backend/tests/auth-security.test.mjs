@@ -51,7 +51,13 @@ for (const forbidden of ['email', 'name', 'pin', 'passwordHash', 'avatarUrl']) {
 console.log('\n--- refresh cookie flags ---');
 t('httpOnly', /httpOnly:\s*true/.test(jwtSrc));
 t('secure in production', /secure:\s*env\.isProd/.test(jwtSrc));
-t('sameSite strict', /sameSite:\s*'strict'/.test(jwtSrc));
+// Frontend (Vercel) and API (Render) are separate sites in production, so a
+// 'strict' cookie would be withheld on load and log the user out on refresh.
+// Dev keeps 'strict' because Vite proxies /api onto a single origin.
+t('sameSite is strict in development', /env\.isProd\s*\?\s*'none'\s*:\s*'strict'/.test(jwtSrc));
+t('sameSite none is paired with secure', !/sameSite:\s*'none'/.test(jwtSrc) || /secure:\s*env\.isProd/.test(jwtSrc));
+t('set and clear use the same sameSite value',
+  (jwtSrc.match(/sameSite:\s*REFRESH_COOKIE_SAME_SITE/g) || []).length === 2);
 t('scoped to /api/auth', /path:\s*'\/api\/auth'/.test(jwtSrc));
 t('refresh token never returned in a response body',
   !/sendSuccess\([^)]*refreshToken/.test(ctlSrc) && !/refreshToken:/.test(ctlSrc));
