@@ -56,7 +56,11 @@ const auditLogSchema = new mongoose.Schema(
     userAgent: { type: String, trim: true, maxlength: 300, default: '' },
     requestId: { type: String, trim: true, maxlength: 64, default: '' },
 
-    at: { type: Date, required: true, default: Date.now, index: true },
+    // No `index: true` here. It would create a plain `at_1`, and the TTL
+    // index declared below needs that exact name WITH expireAfterSeconds —
+    // MongoDB refuses to change an existing index's options in place, so the
+    // two declarations collide and the sync fails.
+    at: { type: Date, required: true, default: Date.now },
   },
   {
     versionKey: false,

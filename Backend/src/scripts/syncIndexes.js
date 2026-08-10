@@ -27,6 +27,39 @@ import mongoose from 'mongoose';
 import { env } from '../config/env.js';
 import '../models/index.js';
 
+/** MongoDB's code for "an index with this name exists, with other options". */
+const INDEX_OPTIONS_CONFLICT = 85;
+
+/**
+ * `syncIndexes()` for one model, tolerating a changed index definition.
+ *
+ * It drops indexes the schema no longer declares, but it cannot MODIFY one:
+ * asking for `at_1` with a TTL when a plain `at_1` already exists fails with
+ * code 85 rather than replacing it. That is the normal outcome of adding a
+ * TTL or changing a partial filter to an index that already shipped, so the
+ * script drops the conflicting index by name and syncs again instead of
+ * making the operator do it by hand.
+ *
+ * Returns the names of dropped indexes, same as `syncIndexes()`.
+ */
+async function syncOne(model) {
+  try {
+    return await model.syncIndexes();
+  } catch (err) {
+    if (err?.code !== INDEX_OPTIONS_CONFLICT) throw err;
+
+    // The server names the offending index in the error detail; fall back to
+    // parsing the message, whose shape has been stable across releases.
+    const conflicting = err.errmsg?.match(/name: "([^"]+)"/)?.[1] ?? err.message?.match(/name: "([^"]+)"/)?.[1];
+    if (!conflicting) throw err;
+
+    console.log(`    ↻ ${model.modelName}.${conflicting} changed definition — recreating`);
+    await model.collection.dropIndex(conflicting);
+    const removed = await model.syncIndexes();
+    return [...removed, conflicting];
+  }
+}
+
 async function main() {
   await mongoose.connect(env.MONGO_URI);
 
@@ -40,7 +73,7 @@ async function main() {
     const model = mongoose.model(name);
     // Returns the names of indexes it removed; the ones it creates are not
     // reported, so they are counted from the resulting index list instead.
-    const removed = await model.syncIndexes();
+    const removed = await syncOne(model);
     const current = await model.collection.indexes();
 
     // Every collection has _id_ for free; it is not something we declared.
