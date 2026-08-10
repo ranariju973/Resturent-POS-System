@@ -507,6 +507,7 @@ export function IconButton({
   danger = false,
   size = 28,
   iconSize = 13,
+  busy = false,
 }: {
   icon: string;
   title: string;
@@ -514,6 +515,12 @@ export function IconButton({
   danger?: boolean;
   size?: number;
   iconSize?: number;
+  /**
+   * Swaps the glyph for a spinner and stops further clicks. The button keeps
+   * its exact dimensions while busy — the spinner is sized to the glyph it
+   * replaces, so a row of these does not reflow when one of them starts work.
+   */
+  busy?: boolean;
 }) {
   const isMobile = useIsMobile();
   // 40px is the smallest target either platform's guidance accepts, and a
@@ -527,7 +534,9 @@ export function IconButton({
       className={`press ${danger ? 'hv-danger' : 'hv-green'}`}
       title={title}
       onClick={onClick}
+      disabled={busy}
       style={{
+        ...(busy ? { opacity: 0.6, cursor: 'default' } : null),
         // Square, always — the two must not diverge or the radius stops
         // describing a circle.
         width: touchSize,
@@ -543,7 +552,7 @@ export function IconButton({
         flexShrink: 0,
       }}
     >
-      <Icon icon={icon} size={glyph} />
+      {busy ? <Spinner size={glyph} /> : <Icon icon={icon} size={glyph} />}
     </button>
   );
 }

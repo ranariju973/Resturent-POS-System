@@ -237,6 +237,7 @@ export function Customers() {
                           title="Remove customer"
                           iconSize={14}
                           size={30}
+                          busy={state.custSaving}
                           onClick={() => {
                             const ok = window.confirm(
                               `Remove ${selected.name}? Their order history stays on the orders themselves.`,
@@ -601,7 +602,7 @@ function CustomerModal() {
 
       {state.custError ? <ErrorLine message={state.custError} /> : null}
 
-      <ModalActions onCancel={actions.closeModal} onSave={actions.saveCustomer} />
+      <ModalActions onCancel={actions.closeModal} onSave={actions.saveCustomer} busy={state.custSaving} />
     </ModalOverlay>
   );
 }

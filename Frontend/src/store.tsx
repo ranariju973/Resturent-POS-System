@@ -359,6 +359,8 @@ interface State {
   splitMap: Record<number, number>;
   evenSplit: boolean;
   tablesLoading: boolean;
+  /** Set while a table save or delete is in flight. Drives the modal's spinner. */
+  tblSaving: boolean;
   tablesError: string;
   /**
    * Zone names in use, from the server rather than a hardcoded list — an admin
@@ -395,6 +397,11 @@ interface State {
   deleteOrderId: string | null;
   deleteOrderReason: string;
   deleteOrderError: string;
+  /**
+   * Set while the delete is in flight. This one is irreversible and fans out
+   * into three refetches, so a second click during the wait must not land.
+   */
+  deleteOrderBusy: boolean;
 
   customers: Customer[];
   custQuery: string;
@@ -405,6 +412,8 @@ interface State {
   custDraft: CustomerDraft;
   custError: string;
   custLoading: boolean;
+  /** Set while a customer save or delete is in flight. Drives the modal's spinner. */
+  custSaving: boolean;
   custLoadError: string;
 
   // --- Employees -----------------------------------------------------------
@@ -465,6 +474,8 @@ interface State {
   expDesc: boolean;
   expDraft: ExpenseDraft;
   expError: string;
+  /** Set while an expense save or delete is in flight. */
+  expSaving: boolean;
 }
 
 const createInitialState = (): State => {
@@ -557,6 +568,7 @@ const createInitialState = (): State => {
     splitMap: {},
     evenSplit: false,
     tablesLoading: false,
+    tblSaving: false,
     tablesError: '',
     zones: [],
     tableStatus: 'all',
@@ -579,6 +591,7 @@ const createInitialState = (): State => {
     deleteOrderId: null,
     deleteOrderReason: '',
     deleteOrderError: '',
+    deleteOrderBusy: false,
 
     customers: [],
     custQuery: '',
@@ -588,6 +601,7 @@ const createInitialState = (): State => {
     custDraft: { name: '', phone: '', email: '', notes: '' },
     custError: '',
     custLoading: false,
+    custSaving: false,
     custLoadError: '',
 
     empTab: 'list',
@@ -645,6 +659,7 @@ const createInitialState = (): State => {
       amt: '',
     },
     expError: '',
+    expSaving: false,
   };
 };
 
@@ -1617,22 +1632,29 @@ function usePosState() {
         const name = s.draft.name.trim();
         if (!name) return;
 
+        // The dialog already passes state.menuSaving to its save button; until
+        // now nothing on this path ever set it, so the spinner never appeared.
+        patch({ menuSaving: true });
         try {
           if (s.modal.mode === 'add') {
             const cat = await menuApi.createCategory({ name, color: s.draft.color });
-            patch({ cats: [...s.cats, cat], selCat: cat.id, modal: null });
+            patch({ menuSaving: false, cats: [...s.cats, cat], selCat: cat.id, modal: null });
             return flash(`Category "${name}" added`);
           }
 
           const id = s.modal.target;
-          if (!id) return;
+          if (!id) return patch({ menuSaving: false });
           const cat = await menuApi.updateCategory(id, { name, color: s.draft.color });
           // Items reference the category by id, so a rename needs no fixups —
           // that is the whole reason `cat` stopped being a name.
-          patch({ cats: s.cats.map((c) => (c.id === id ? cat : c)), modal: null });
+          patch({
+            menuSaving: false,
+            cats: s.cats.map((c) => (c.id === id ? cat : c)),
+            modal: null,
+          });
           flash('Category updated');
         } catch (err) {
-          patch({ modal: null });
+          patch({ menuSaving: false, modal: null });
           flash(describe(err, 'Could not save the category.'));
         }
       },
@@ -1684,6 +1706,12 @@ function usePosState() {
         if (s.modal?.kind !== 'del') return;
         const { delKind, target } = s.modal;
 
+        // Shares menuSaving with saveCat/saveItem: both drive the same modal
+        // and cannot run at once, so a second flag would only be a second
+        // thing to forget to clear. The item path can make two sequential
+        // round trips (purge, then the soft fallback), which is exactly the
+        // wait that looked like a dead button.
+        patch({ menuSaving: true });
         try {
           if (delKind === 'cat') {
             // Refused server-side while live items still reference it, so the
@@ -1692,6 +1720,7 @@ function usePosState() {
             const rest = s.cats.filter((c) => c.id !== target);
             const doomed = s.items.filter((i) => i.cat === target).map((i) => i.id);
             patch({
+              menuSaving: false,
               cats: rest,
               items: s.items.filter((i) => i.cat !== target),
               cart: s.cart.filter((l) => !doomed.includes(l.id)),
@@ -1724,6 +1753,7 @@ function usePosState() {
           }
 
           patch({
+            menuSaving: false,
             items: s.items.filter((i) => i.id !== target),
             cart: s.cart.filter((l) => l.id !== target),
             modal: null,
@@ -1734,7 +1764,7 @@ function usePosState() {
               : 'Item removed — the record was kept because it appears on past orders',
           );
         } catch (err) {
-          patch({ modal: null });
+          patch({ menuSaving: false, modal: null });
           flash(describe(err, 'Could not delete that.'));
         }
       },
@@ -1861,16 +1891,19 @@ function usePosState() {
           return patch({ tableError: 'Seats must be a whole number between 1 and 50' });
         }
 
+        // Set after the validation guards above, all of which return without
+        // touching the network — flagging before them would strand the flag.
+        patch({ tblSaving: true });
         try {
           if (modal.mode === 'add') {
             await tablesApi.createTable({ name, seats, zone });
             flash(`Table ${name} added`);
           } else {
-            if (!modal.target) return;
+            if (!modal.target) return patch({ tblSaving: false });
             await tablesApi.updateTable(modal.target, { name, seats, zone });
             flash(`Table ${name} updated`);
           }
-          patch({ modal: null });
+          patch({ tblSaving: false, modal: null });
           // Refetch rather than patching in place: a new zone changes the
           // filter row, and the server uppercases table names.
           void actions.loadTables();
@@ -1878,7 +1911,7 @@ function usePosState() {
           // Held open with the message inline — a duplicate name, or an
           // occupied table being reconfigured, both come back as a 409 the
           // admin can act on without retyping the form.
-          patch({ tableError: describe(err, 'Could not save that table.') });
+          patch({ tblSaving: false, tableError: describe(err, 'Could not save that table.') });
         }
       },
 
@@ -1889,15 +1922,18 @@ function usePosState() {
        */
       deleteTable: async (id: string) => {
         const s = ref.current;
+        patch({ tblSaving: true });
         try {
           await tablesApi.deleteTable(id);
           patch({
+            tblSaving: false,
             tables: s.tables.filter((t) => t.id !== id),
             selTable: s.selTable === id ? null : s.selTable,
             modal: null,
           });
           flash('Table removed');
         } catch (err) {
+          patch({ tblSaving: false });
           flash(describe(err, 'Could not remove that table.'));
         }
       },
@@ -2084,9 +2120,14 @@ function usePosState() {
           });
         }
 
+        // Guard as well as flag: this deletes an order permanently, so a
+        // double click must not send the request twice.
+        if (s.deleteOrderBusy) return;
+        patch({ deleteOrderBusy: true });
         try {
           await ordersApi.deleteOrder(id, reason);
           patch({
+            deleteOrderBusy: false,
             deleteOrderId: null,
             deleteOrderReason: '',
             deleteOrderError: '',
@@ -2098,7 +2139,10 @@ function usePosState() {
           void actions.loadTables();
           void actions.loadBoard();
         } catch (err) {
-          patch({ deleteOrderError: describe(err, 'Could not delete that order.') });
+          patch({
+            deleteOrderBusy: false,
+            deleteOrderError: describe(err, 'Could not delete that order.'),
+          });
         }
       },
 
@@ -2147,6 +2191,8 @@ function usePosState() {
         if (!name) return patch({ custError: 'Enter the customer’s name' });
         if (!phone) return patch({ custError: 'Phone number is required — it identifies them' });
 
+        // After the validation guards, which return before any request.
+        patch({ custSaving: true });
         try {
           const updated = await customersApi.updateCustomer(modal.target, {
             name,
@@ -2155,6 +2201,7 @@ function usePosState() {
             notes: s.custDraft.notes,
           });
           patch({
+            custSaving: false,
             customers: s.customers.map((c) => (c.id === updated.id ? updated : c)),
             modal: null,
           });
@@ -2162,7 +2209,7 @@ function usePosState() {
         } catch (err) {
           // Kept open with the message inline: a duplicate phone number is the
           // likely failure, and closing the form would lose what was typed.
-          patch({ custError: describe(err, 'Could not save those details.') });
+          patch({ custSaving: false, custError: describe(err, 'Could not save those details.') });
         }
       },
 
@@ -2172,15 +2219,18 @@ function usePosState() {
        */
       deleteCustomer: async (id: string) => {
         const s = ref.current;
+        patch({ custSaving: true });
         try {
           await customersApi.deleteCustomer(id);
           const rest = s.customers.filter((c) => c.id !== id);
           patch({
+            custSaving: false,
             customers: rest,
             selCust: s.selCust === id ? (rest[0]?.id ?? null) : s.selCust,
           });
           flash('Customer removed');
         } catch (err) {
+          patch({ custSaving: false });
           flash(describe(err, 'Could not remove that customer.'));
         }
       },
@@ -2616,6 +2666,8 @@ function usePosState() {
           return patch({ expError: 'Enter an amount greater than zero' });
         }
 
+        // After the validation guards, which return before any request.
+        patch({ expSaving: true });
         try {
           await reportsApi.createExpense({
             date,
@@ -2623,22 +2675,25 @@ function usePosState() {
             description: desc.trim(),
             amount: amt.trim(),
           });
-          patch({ modal: null, expDraft: { date, cat, desc: '', amt: '' } });
+          patch({ expSaving: false, modal: null, expDraft: { date, cat, desc: '', amt: '' } });
           flash('Expense logged');
           // Refetch rather than appending: the list is sorted and paginated
           // server-side, and the P&L behind it has changed too.
           void actions.loadReport();
         } catch (err) {
-          patch({ expError: describe(err, 'Could not save that expense.') });
+          patch({ expSaving: false, expError: describe(err, 'Could not save that expense.') });
         }
       },
 
       deleteExpense: async (id: string) => {
+        patch({ expSaving: true });
         try {
           await reportsApi.deleteExpense(id);
+          patch({ expSaving: false });
           flash('Expense removed');
           void actions.loadReport();
         } catch (err) {
+          patch({ expSaving: false });
           flash(describe(err, 'Could not remove that expense.'));
         }
       },

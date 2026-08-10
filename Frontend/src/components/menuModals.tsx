@@ -297,6 +297,8 @@ export function DeleteModal() {
         onCancel={actions.closeModal}
         onSave={actions.confirmDelete}
         saveLabel="Delete"
+        busyLabel="Deleting…"
+        busy={state.menuSaving}
         destructive
       />
     </ModalOverlay>

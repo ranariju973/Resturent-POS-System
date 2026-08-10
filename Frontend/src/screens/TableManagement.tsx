@@ -146,7 +146,11 @@ function TableModal() {
         <span style={{ fontSize: 13, fontWeight: 600, color: '#c82014' }}>{state.tableError}</span>
       ) : null}
 
-      <ModalActions onCancel={actions.closeModal} onSave={() => void actions.saveTable()} />
+      <ModalActions
+        onCancel={actions.closeModal}
+        onSave={() => void actions.saveTable()}
+        busy={state.tblSaving}
+      />
     </ModalOverlay>
   );
 }

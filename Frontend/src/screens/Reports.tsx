@@ -553,6 +553,7 @@ export function Reports() {
                     title="Remove expense"
                     iconSize={14}
                     size={28}
+                    busy={state.expSaving}
                     onClick={() => {
                       const ok = window.confirm(
                         `Remove "${expense.description}" for ${money(expense.amount)}?`,
@@ -918,7 +919,7 @@ function ExpenseModal() {
 
       {state.expError ? <ErrorLine message={state.expError} /> : null}
 
-      <ModalActions onCancel={actions.closeModal} onSave={actions.saveExpense} />
+      <ModalActions onCancel={actions.closeModal} onSave={actions.saveExpense} busy={state.expSaving} />
     </ModalOverlay>
   );
 }

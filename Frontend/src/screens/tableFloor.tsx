@@ -18,6 +18,7 @@ import { usePos } from '../store';
 import { PERMISSIONS, can } from '../lib/permissions';
 import { duration, minutesSince, money } from '../lib/format';
 import { useIsMobile } from '../lib/useViewport';
+import { Spinner } from '../components/motion';
 import { CARD_SHADOW, LoadState, PageHeading, card, primaryPill } from '../components/ui';
 import { SkeletonGrid } from '../components/motion';
 
@@ -256,7 +257,7 @@ function StatusChip({
 }
 
 function TableTile({ table, mayEdit }: { table: Table; mayEdit: boolean }) {
-  const { actions } = usePos();
+  const { state, actions } = usePos();
   const isMobile = useIsMobile();
   const tone = TONE[table.status];
   const occupied = table.status === 'occupied';
@@ -453,6 +454,7 @@ function TableTile({ table, mayEdit }: { table: Table; mayEdit: boolean }) {
             icon="lucide:trash-2"
             label="Delete"
             danger
+            busy={state.tblSaving}
             onClick={() => {
               const ok = window.confirm(
                 `Remove ${table.name}? Past orders keep resolving — the record is kept, not erased.`,
@@ -471,17 +473,21 @@ function TileAction({
   label,
   danger,
   onClick,
+  busy = false,
 }: {
   icon: string;
   label: string;
   danger?: boolean;
   onClick: () => void;
+  /** Replaces the icon with a spinner and blocks repeat clicks. */
+  busy?: boolean;
 }) {
   return (
     <button
       type="button"
       className="press"
       onClick={onClick}
+      disabled={busy}
       style={{
         flex: 1,
         display: 'flex',
@@ -494,10 +500,11 @@ function TileAction({
         color: danger ? '#c82014' : 'rgba(0,0,0,0.58)',
         fontSize: 12,
         fontWeight: 700,
-        cursor: 'pointer',
+        cursor: busy ? 'default' : 'pointer',
+        ...(busy ? { opacity: 0.6 } : null),
       }}
     >
-      <Icon icon={icon} size={13} />
+      {busy ? <Spinner size={13} /> : <Icon icon={icon} size={13} />}
       {label}
     </button>
   );

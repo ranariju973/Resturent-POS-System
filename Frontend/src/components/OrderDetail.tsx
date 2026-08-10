@@ -9,6 +9,7 @@ import { usePos } from '../store';
 import { CURRENCY, money, plural } from '../lib/format';
 import { Icon } from '../icons/Icon';
 import { ModalOverlay, ModalTitle, bareInput } from './ui';
+import { Spinner } from './motion';
 
 const STATUS_LABEL: Record<'open' | 'paid' | 'voided', string> = {
   open: 'Open',
@@ -186,15 +187,32 @@ export function OrderDetail({ mayDelete }: { mayDelete: boolean }) {
                 type="button"
                 className="press"
                 onClick={() => void actions.confirmDeleteOrder()}
-                style={{ ...dangerButton, flex: 1 }}
+                disabled={state.deleteOrderBusy}
+                style={{
+                  ...dangerButton,
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  ...(state.deleteOrderBusy ? { opacity: 0.75, cursor: 'default' } : null),
+                }}
               >
-                Delete permanently
+                {state.deleteOrderBusy ? <Spinner size={14} /> : null}
+                {state.deleteOrderBusy ? 'Deleting…' : 'Delete permanently'}
               </button>
               <button
                 type="button"
                 className="press"
                 onClick={actions.cancelDeleteOrder}
-                style={{ ...dangerButton, flex: 1, background: 'transparent', color: '#1E3932' }}
+                disabled={state.deleteOrderBusy}
+                style={{
+                  ...dangerButton,
+                  flex: 1,
+                  background: 'transparent',
+                  color: '#1E3932',
+                  ...(state.deleteOrderBusy ? { opacity: 0.5, cursor: 'default' } : null),
+                }}
               >
                 Keep it
               </button>
