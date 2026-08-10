@@ -66,9 +66,16 @@ export function MenuManagement() {
               flexDirection: 'column',
               gap: 12,
               padding: isMobile ? 12 : 16,
-              // Capped rather than free: the category list must not grow tall
-              // enough to push the items it is filtering off the screen.
-              maxHeight: isMobile ? '38dvh' : undefined,
+              /*
+               * On mobile the categories are a short auto-height block that
+               * scrolls sideways, not a tall pane.
+               *
+               * It used to be `maxHeight: 38dvh` inside a `minHeight: 0`
+               * column, which left the items grid below it almost no height —
+               * so the grid had nothing to scroll and the screen felt frozen.
+               * Sizing to content here gives the grid the rest of the column.
+               */
+              ...(isMobile ? { flexShrink: 0 } : null),
             }}
           >
             <button
@@ -82,15 +89,28 @@ export function MenuManagement() {
             </button>
 
             <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                overflowY: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-                paddingRight: 2,
-              }}
+              style={
+                isMobile
+                  ? {
+                      // A single swipeable row. Vertical space is the scarce
+                      // resource on a phone; horizontal is free.
+                      display: 'flex',
+                      flexDirection: 'row',
+                      gap: 8,
+                      overflowX: 'auto',
+                      paddingBottom: 4,
+                      scrollbarWidth: 'none',
+                    }
+                  : {
+                      flex: 1,
+                      minHeight: 0,
+                      overflowY: 'auto',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                      paddingRight: 2,
+                    }
+              }
             >
               {state.cats.map((cat) => {
                 const active = cat.id === state.selCat;
@@ -112,6 +132,9 @@ export function MenuManagement() {
                       transition: 'all 0.2s ease',
                       background: active ? '#d4e9e2' : '#ffffff',
                       border: `1px solid ${active ? '#00754A' : '#edebe9'}`,
+                      // In the horizontal strip a chip sizes to its label and
+                      // must not be squeezed by its neighbours.
+                      ...(isMobile ? { flexShrink: 0 } : null),
                     }}
                   >
                     <span
@@ -129,7 +152,9 @@ export function MenuManagement() {
                         flexDirection: 'column',
                         gap: 2,
                         minWidth: 0,
-                        flex: 1,
+                        // `flex: 1` fills the sidebar row on desktop; in the
+                        // mobile strip it would stretch every chip equally.
+                        flex: isMobile ? undefined : 1,
                       }}
                     >
                       <span
@@ -156,7 +181,15 @@ export function MenuManagement() {
                         gap: 6,
                         flexShrink: 0,
                         transition: 'opacity 0.2s ease',
-                        opacity: showTools ? 1 : 0,
+                        /*
+                         * `showTools` is hover-driven, and a touch screen has
+                         * no hover — these controls were simply unreachable on
+                         * a phone. There, show them on the selected chip only,
+                         * which keeps the strip from turning into a wall of
+                         * icons.
+                         */
+                        opacity: isMobile ? (active ? 1 : 0) : showTools ? 1 : 0,
+                        ...(isMobile && !active ? { display: 'none' } : null),
                       }}
                     >
                       <IconButton
@@ -187,16 +220,26 @@ export function MenuManagement() {
             style={{
               ...card,
               flex: 1,
+              // Without this the grid below cannot shrink, so it overflows the
+              // column instead of scrolling inside it.
+              minHeight: 0,
               minWidth: 0,
               display: 'flex',
               flexDirection: 'column',
-              gap: 16,
-              padding: 16,
+              gap: isMobile ? 12 : 16,
+              padding: isMobile ? 12 : 16,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: isMobile ? 8 : 12,
+                flexShrink: 0,
+              }}
+            >
               <SearchInput
-                placeholder={`Search items in ${selCatName || 'No category'}`}
+                placeholder={isMobile ? 'Search items' : `Search items in ${selCatName || 'No category'}`}
                 value={state.itemQuery}
                 onChange={(itemQuery) => actions.patch({ itemQuery })}
                 style={{ flex: 1, minWidth: 0 }}
@@ -205,10 +248,17 @@ export function MenuManagement() {
                 type="button"
                 className="press hv-primary"
                 onClick={() => actions.openItemModal(null)}
-                style={{ ...primaryPill, flexShrink: 0 }}
+                style={{
+                  ...primaryPill,
+                  flexShrink: 0,
+                  // Icon-only on a phone: the label costs the search field
+                  // most of its width and the plus reads the same.
+                  ...(isMobile ? { padding: '11px 14px' } : null),
+                }}
+                title="Add Menu Item"
               >
                 <Icon icon="lucide:plus" />
-                Add Menu Item
+                {isMobile ? null : 'Add Menu Item'}
               </button>
             </div>
 

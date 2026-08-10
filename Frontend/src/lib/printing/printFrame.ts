@@ -52,6 +52,90 @@ function receiptCss(paper: PaperWidth): string {
 const nextFrame = () =>
   new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 
+/*
+ * ── Why mobile cannot use the iframe ───────────────────────────────────────
+ * Everything above is true on a desktop browser. On a phone it is not:
+ * iOS Safari and Chrome on Android do not reliably honour `print()` called on
+ * a subframe. iOS in particular ignores the frame's document entirely and
+ * paginates the TOP-LEVEL page instead — which is why printing a bill from a
+ * phone produced a screenshot of the billing screen rather than the receipt.
+ *
+ * There is no way to feature-detect this: `print()` exists, returns without
+ * error, and prints the wrong document. So the transport is chosen by
+ * viewport, and the mobile branch makes the receipt the top-level document by
+ * opening it in its own tab, where `print()` is unambiguous.
+ */
+const MOBILE_PRINT_MAX = 767;
+
+function isMobileViewport(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.innerWidth <= MOBILE_PRINT_MAX;
+}
+
+/**
+ * Print by handing the receipt to a new top-level document.
+ *
+ * The window is opened SYNCHRONOUSLY from the click that triggered the print —
+ * a popup opened after an await has lost the user-activation that lets it
+ * through the popup blocker.
+ *
+ * `onafterprint` closes it on the browsers that fire the event; the rest leave
+ * a tab showing the receipt, which the user can dismiss. That is the honest
+ * failure mode: a visible receipt they can print manually beats a silent
+ * no-op or a screenshot of the wrong screen.
+ */
+function printViaWindow(html: string, paper: PaperWidth): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const win = window.open('', '_blank');
+
+    // Blocked by the popup blocker. Rejecting surfaces it as a toast through
+    // the store's existing error handling — a silent resolve would look like
+    // a print that simply did nothing.
+    if (!win) {
+      reject(
+        new Error(
+          'The print window was blocked. Allow pop-ups for this site to print from a phone.',
+        ),
+      );
+      return;
+    }
+
+    win.document.open();
+    win.document.write(
+      `<!doctype html><html><head><meta charset="utf-8">` +
+        `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+        `<title>Receipt</title><style>${receiptCss(paper)}</style></head>` +
+        `<body>${html}</body></html>`,
+    );
+    win.document.close();
+
+    // Resolve as soon as the dialog has been handed over: unlike the iframe
+    // path there is nothing to clean up in this document, and a phone's print
+    // sheet can sit open for a long time.
+    const done = () => resolve();
+    win.addEventListener('afterprint', () => {
+      win.close();
+      done();
+    });
+
+    void (async () => {
+      await nextFrame();
+      try {
+        await win.document.fonts?.ready;
+      } catch {
+        /* Not supported everywhere. */
+      }
+      try {
+        win.focus();
+        win.print();
+      } catch {
+        /* Leave the tab open with the receipt visible. */
+      }
+      done();
+    })();
+  });
+}
+
 /**
  * Print one document's worth of HTML.
  *
@@ -60,6 +144,10 @@ const nextFrame = () =>
  * settles would wedge a multi-copy loop forever.
  */
 export function printHtml(html: string, paper: PaperWidth): Promise<void> {
+  // A phone ignores a subframe's print() and paginates the page behind it
+  // instead. See the note above printViaWindow.
+  if (isMobileViewport()) return printViaWindow(html, paper);
+
   return new Promise((resolve) => {
     const frame = document.createElement('iframe');
 

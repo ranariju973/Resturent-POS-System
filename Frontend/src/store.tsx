@@ -23,6 +23,7 @@ import type { DashboardData } from './lib/dashboardApi';
 import type { PhoneSuggestion } from './lib/customersApi';
 import { ApiError } from './lib/api';
 import { money } from './lib/format';
+import { MOBILE_MAX } from './lib/useViewport';
 import * as settingsApi from './lib/settingsApi';
 import * as printing from './lib/printing';
 import type { BillData, KotData, PrinterSettings } from './lib/printing/types';
@@ -2182,12 +2183,31 @@ function usePosState() {
           const customers = await customersApi.listCustomers({
             search: ref.current.custQuery.trim() || undefined,
           });
+          /*
+           * Auto-select the first customer on desktop only.
+           *
+           * The two layouts read this field differently. Desktop shows list
+           * and detail side by side, so an empty detail pane looks broken —
+           * hence the fallback. Mobile shows ONE of them, choosing by whether
+           * anything is selected, so the same fallback opens a customer
+           * nobody tapped and hides the list behind a back button.
+           *
+           * Read directly rather than through useIsMobile: this is the store,
+           * where hooks cannot run, and the value is only needed at the
+           * moment the list lands.
+           */
+          const stillThere = customers.some((c) => c.id === ref.current.selCust);
+          const isMobile =
+            typeof window !== 'undefined' && window.innerWidth <= MOBILE_MAX;
+
           patch({
             customers,
             custLoading: false,
-            selCust: customers.some((c) => c.id === ref.current.selCust)
+            selCust: stillThere
               ? ref.current.selCust
-              : (customers[0]?.id ?? null),
+              : isMobile
+                ? null
+                : (customers[0]?.id ?? null),
           });
         } catch (err) {
           patch({ custLoading: false, custLoadError: describe(err, 'Could not load customers.') });
