@@ -1,19 +1,39 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { AppShell } from './components/AppShell';
 import { Toast } from './components/Toast';
 import { Billing } from './screens/Billing';
-import { Customers } from './screens/Customers';
-import { Dashboard } from './screens/Dashboard';
-import { Employees } from './screens/Employees';
-import { PrinterSettings } from './screens/PrinterSettings';
-import { Kitchen } from './screens/Kitchen';
 import { Login } from './screens/Login';
-import { MenuManagement } from './screens/MenuManagement';
-import { Reports } from './screens/Reports';
-import { TableManagement } from './screens/TableManagement';
 import { usePos } from './store';
 import { canViewScreen } from './lib/permissions';
 import { motion, AnimatePresence, screenFade } from './components/motion';
+import { Spinner } from './components/motion';
+
+/*
+ * ── Why most screens are lazy, and two are not ─────────────────────────────
+ * Every screen used to be a static import, so one bundle carried all of them:
+ * a cashier who only ever opens Billing still downloaded Reports, Payroll and
+ * the printer settings before the till could take an order. On a phone over
+ * restaurant wifi that is the difference the staff actually feel.
+ *
+ * Billing and Login stay eager on purpose. Login is the first paint, and
+ * putting a spinner in front of it would trade a real delay for a visible one.
+ * Billing is both the most-used screen in a POS and the fallback below when a
+ * permission check fails, so it has to be resolvable synchronously.
+ */
+const Dashboard = lazy(() => import('./screens/Dashboard').then((m) => ({ default: m.Dashboard })));
+const Customers = lazy(() => import('./screens/Customers').then((m) => ({ default: m.Customers })));
+const Employees = lazy(() => import('./screens/Employees').then((m) => ({ default: m.Employees })));
+const Kitchen = lazy(() => import('./screens/Kitchen').then((m) => ({ default: m.Kitchen })));
+const MenuManagement = lazy(() =>
+  import('./screens/MenuManagement').then((m) => ({ default: m.MenuManagement })),
+);
+const PrinterSettings = lazy(() =>
+  import('./screens/PrinterSettings').then((m) => ({ default: m.PrinterSettings })),
+);
+const Reports = lazy(() => import('./screens/Reports').then((m) => ({ default: m.Reports })));
+const TableManagement = lazy(() =>
+  import('./screens/TableManagement').then((m) => ({ default: m.TableManagement })),
+);
 
 const SCREENS = {
   dashboard: Dashboard,
@@ -26,6 +46,29 @@ const SCREENS = {
   employees: Employees,
   printer: PrinterSettings,
 } as const;
+
+/**
+ * Shown while a screen chunk is in flight.
+ *
+ * Sized to fill the pane rather than collapsing it: a zero-height fallback
+ * would let the shell reflow for the moment the chunk loads, which reads as a
+ * flicker on every first visit to a tab.
+ */
+function ScreenLoading() {
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <Spinner size={22} />
+    </div>
+  );
+}
 
 export function App() {
   const { state, actions } = usePos();
@@ -110,7 +153,13 @@ export function App() {
               transition={screenFade.transition}
               style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
             >
-              {allowed ? <Screen /> : <NoAccess />}
+              {allowed ? (
+                <Suspense fallback={<ScreenLoading />}>
+                  <Screen />
+                </Suspense>
+              ) : (
+                <NoAccess />
+              )}
             </motion.div>
           </AnimatePresence>
         </AppShell>

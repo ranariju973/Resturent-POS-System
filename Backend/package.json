@@ -14,6 +14,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "seed": "node src/scripts/seed.js",
+    "sync-indexes": "node src/scripts/syncIndexes.js",
     "test": "npm run verify",
     "verify": "for f in tests/*.test.mjs; do node --import ./tests/helpers/register.mjs \"$f\" || exit 1; done",
     "test:integration": "node tests/integration/flow.test.mjs",

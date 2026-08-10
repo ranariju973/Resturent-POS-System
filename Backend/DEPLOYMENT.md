@@ -64,18 +64,19 @@ never cooks.
 - [ ] Atlas Network Access allows the deployment's IP, not `0.0.0.0/0`
 - [ ] **Build indexes explicitly.** `autoIndex` is off in production
       (`src/config/db.js`), so without this every query falls back to a
-      collection scan:
+      collection scan — the database reads every document to answer what an
+      index would have answered in one seek. On a shared/free-tier cluster
+      that is the single biggest source of avoidable load, and it gets worse
+      as order history grows.
 
-```js
-// Run once against production, after the first deploy
-import './src/models/index.js';
-import mongoose from 'mongoose';
-await mongoose.connect(process.env.MONGO_URI);
-for (const name of mongoose.modelNames()) {
-  await mongoose.model(name).syncIndexes();
-  console.log(`indexed ${name}`);
-}
+```bash
+MONGO_URI="<production uri>" npm run sync-indexes
 ```
+
+Run it once after the first deploy, and again whenever a schema's indexes
+change. It is safe to re-run: `syncIndexes()` also drops indexes that are no
+longer declared, so the database ends up matching the schemas rather than
+accumulating whatever every past version created.
 
 ### 6. TLS and proxying
 

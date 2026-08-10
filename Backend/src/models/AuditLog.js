@@ -82,6 +82,24 @@ auditLogSchema.index({ at: -1 });
 auditLogSchema.index({ actor: 1, at: -1 });
 auditLogSchema.index({ action: 1, at: -1 });
 
+/**
+ * Ninety-day retention, enforced by the database.
+ *
+ * Nothing here was ever deleted, and every order, void, refund and failed
+ * sign-in writes a row — so the collection grew without bound against a fixed
+ * storage quota, taking three indexes with it.
+ *
+ * Ninety days covers the window in which a disputed bill or a staff question
+ * actually gets raised. MongoDB removes anything older on its own schedule
+ * (it sweeps about once a minute), so there is no cleanup job to schedule and
+ * nothing to forget.
+ *
+ * NOTE: this is a retention POLICY, not a storage trick. Lengthening it later
+ * is safe; shortening it destroys history that is already gone by then.
+ */
+const AUDIT_RETENTION_DAYS = 90;
+auditLogSchema.index({ at: 1 }, { expireAfterSeconds: AUDIT_RETENTION_DAYS * 24 * 60 * 60 });
+
 function redactMeta(value, seen = new WeakSet()) {
   if (value === null || typeof value !== 'object') return value;
   if (seen.has(value)) return '[Circular]';

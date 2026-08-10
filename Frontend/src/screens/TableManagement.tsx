@@ -40,10 +40,52 @@ export function TableManagement() {
    * permission wiring. Fifteen seconds is well inside how fast a floor plan
    * actually changes, and it stops the moment the screen is closed.
    */
+  /*
+   * ── Why the poll pauses when the tab is hidden ─────────────────────────────
+   * A POS terminal sits parked on this screen all day. Polling regardless of
+   * visibility meant two queries every fifteen seconds — around eleven
+   * thousand a day per open tab — for a floor plan nobody was looking at.
+   * On a shared-tier database that is the largest single source of load in
+   * the app, and all of it wasted.
+   *
+   * Hidden means no timer at all, not a slower one. Coming back refetches
+   * immediately rather than waiting out the remaining interval, so returning
+   * to the tab shows fresher data than the old always-on poll did.
+   */
   useEffect(() => {
+    let id: number | undefined;
+
+    const stop = () => {
+      if (id !== undefined) {
+        window.clearInterval(id);
+        id = undefined;
+      }
+    };
+
+    const start = () => {
+      stop(); // never stack two timers
+      id = window.setInterval(() => void actions.loadTables(), 15_000);
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+        return;
+      }
+      // Whatever changed while we were away is already stale — fetch now, then
+      // resume the regular cadence.
+      void actions.loadTables();
+      start();
+    };
+
     void actions.loadTables();
-    const id = window.setInterval(() => void actions.loadTables(), 15_000);
-    return () => window.clearInterval(id);
+    if (!document.hidden) start();
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
