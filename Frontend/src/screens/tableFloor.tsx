@@ -454,7 +454,7 @@ function TableTile({ table, mayEdit }: { table: Table; mayEdit: boolean }) {
             icon="lucide:trash-2"
             label="Delete"
             danger
-            busy={state.tblSaving}
+            busy={state.tblBusyId === table.id}
             onClick={() => {
               const ok = window.confirm(
                 `Remove ${table.name}? Past orders keep resolving — the record is kept, not erased.`,

@@ -359,8 +359,17 @@ interface State {
   splitMap: Record<number, number>;
   evenSplit: boolean;
   tablesLoading: boolean;
-  /** Set while a table save or delete is in flight. Drives the modal's spinner. */
+  /** Set while the table modal's save is in flight. Drives its spinner. */
   tblSaving: boolean;
+  /**
+   * The id of the single table currently being mutated from the floor —
+   * delete, clear, transfer or merge — or null when none is.
+   *
+   * An id rather than a boolean because these controls are per-row: a shared
+   * flag spins every tile on the floor when one of them is deleted, which is
+   * exactly the bug this replaced.
+   */
+  tblBusyId: string | null;
   tablesError: string;
   /**
    * Zone names in use, from the server rather than a hardcoded list — an admin
@@ -569,6 +578,7 @@ const createInitialState = (): State => {
     evenSplit: false,
     tablesLoading: false,
     tblSaving: false,
+    tblBusyId: null,
     tablesError: '',
     zones: [],
     tableStatus: 'all',
@@ -1922,18 +1932,20 @@ function usePosState() {
        */
       deleteTable: async (id: string) => {
         const s = ref.current;
-        patch({ tblSaving: true });
+        // Scoped to this id: the delete control lives on every tile, so a
+        // shared boolean would spin the whole floor.
+        patch({ tblBusyId: id });
         try {
           await tablesApi.deleteTable(id);
           patch({
-            tblSaving: false,
+            tblBusyId: null,
             tables: s.tables.filter((t) => t.id !== id),
             selTable: s.selTable === id ? null : s.selTable,
             modal: null,
           });
           flash('Table removed');
         } catch (err) {
-          patch({ tblSaving: false });
+          patch({ tblBusyId: null });
           flash(describe(err, 'Could not remove that table.'));
         }
       },
@@ -1960,11 +1972,16 @@ function usePosState() {
         const target = s.tables.find((t) => t.id === s.selTable);
         if (!target) return;
 
+        patch({ tblBusyId: target.id });
         try {
           const table = await tablesApi.releaseTable(target.id);
-          patch({ tables: s.tables.map((t) => (t.id === table.id ? table : t)) });
+          patch({
+            tblBusyId: null,
+            tables: s.tables.map((t) => (t.id === table.id ? table : t)),
+          });
           flash(`${target.name} is free`);
         } catch (err) {
+          patch({ tblBusyId: null });
           flash(describe(err, 'Could not clear that table.'));
           void actions.loadTables();
         }
@@ -1975,9 +1992,12 @@ function usePosState() {
         const src = s.tables.find((t) => t.id === s.selTable);
         if (!src) return;
 
+        // Keyed to the destination, which is the row the host just tapped.
+        patch({ tblBusyId: destId });
         try {
           const { source, target } = await tablesApi.transferTable(src.id, destId);
           patch({
+            tblBusyId: null,
             tables: s.tables.map((t) =>
               t.id === source.id ? source : t.id === target.id ? target : t,
             ),
@@ -1986,6 +2006,7 @@ function usePosState() {
           });
           flash(`${src.name} transferred to ${target.name}`);
         } catch (err) {
+          patch({ tblBusyId: null });
           flash(describe(err, 'Could not transfer that table.'));
           void actions.loadTables();
         }
@@ -1996,13 +2017,17 @@ function usePosState() {
         const src = s.tables.find((t) => t.id === s.selTable);
         if (!src) return;
 
+        // The slowest of the three: it waits on a full floor refetch before it
+        // is done, so the wait here is the most visible one.
+        patch({ tblBusyId: otherId });
         try {
           await tablesApi.mergeTables(src.id, otherId);
           await actions.loadTables();
-          patch({ panel: 'summary' });
+          patch({ tblBusyId: null, panel: 'summary' });
           const other = ref.current.tables.find((t) => t.id === otherId);
           flash(`${src.name} and ${other?.name ?? 'that table'} now share one bill`);
         } catch (err) {
+          patch({ tblBusyId: null });
           flash(describe(err, 'Could not merge those tables.'));
         }
       },

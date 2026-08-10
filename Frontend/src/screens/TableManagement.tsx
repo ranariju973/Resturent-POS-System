@@ -12,6 +12,7 @@ import {
   outlinePill,
 } from '../components/ui';
 import { TableFloor } from './tableFloor';
+import { Spinner } from '../components/motion';
 
 /** Occupied tables past this many minutes get a red elapsed figure. */
 const LATE_MINUTES = 45;
@@ -368,10 +369,21 @@ function TablePanel() {
                       type="button"
                       className="press hv-green"
                       onClick={() => void actions.releaseTable()}
-                      style={{ ...outlinePill, width: '100%' }}
+                      disabled={state.tblBusyId === table.id}
+                      style={{
+                        ...outlinePill,
+                        width: '100%',
+                        ...(state.tblBusyId === table.id
+                          ? { opacity: 0.6, cursor: 'default' }
+                          : null),
+                      }}
                     >
-                      <Icon icon="lucide:check" />
-                      Clear Table
+                      {state.tblBusyId === table.id ? (
+                        <Spinner size={14} />
+                      ) : (
+                        <Icon icon="lucide:check" />
+                      )}
+                      {state.tblBusyId === table.id ? 'Clearing…' : 'Clear Table'}
                     </button>
                   ) : null}
                   <button
@@ -487,6 +499,7 @@ function TablePanel() {
                 type="button"
                 className="press hv-green-fill"
                 onClick={() => actions.transferTable(t.id)}
+                disabled={state.tblBusyId !== null}
                 style={{
                   textAlign: 'left',
                   padding: 14,
@@ -496,10 +509,22 @@ function TablePanel() {
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 4,
+                  ...(state.tblBusyId !== null ? { opacity: 0.6, cursor: 'default' } : null),
                 }}
               >
-                <span style={{ fontSize: 19, fontWeight: 800, color: '#00754A', lineHeight: 1 }}>
+                <span
+                  style={{
+                    fontSize: 19,
+                    fontWeight: 800,
+                    color: '#00754A',
+                    lineHeight: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
                   {t.name}
+                  {state.tblBusyId === t.id ? <Spinner size={14} /> : null}
                 </span>
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'rgba(0,0,0,0.45)' }}>
                   {t.seats} seats · {t.zone}
@@ -522,6 +547,7 @@ function TablePanel() {
                   type="button"
                   className="press hv-gold"
                   onClick={() => actions.mergeTable(t.id)}
+                  disabled={state.tblBusyId !== null}
                   style={{
                     textAlign: 'left',
                     padding: 14,
@@ -531,10 +557,22 @@ function TablePanel() {
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 4,
+                    ...(state.tblBusyId !== null ? { opacity: 0.6, cursor: 'default' } : null),
                   }}
                 >
-                  <span style={{ fontSize: 19, fontWeight: 800, color: '#6b4f12', lineHeight: 1 }}>
+                  <span
+                    style={{
+                      fontSize: 19,
+                      fontWeight: 800,
+                      color: '#6b4f12',
+                      lineHeight: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
                     {t.name}
+                    {state.tblBusyId === t.id ? <Spinner size={14} /> : null}
                   </span>
                   <span style={{ fontSize: 12, fontWeight: 500, color: '#8a6a24' }}>
                     {t.seats} seats · {money(value)}
