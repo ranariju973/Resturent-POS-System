@@ -27,12 +27,34 @@ import type { PaperWidth } from './types';
  * makes the browser emit one continuous receipt rather than paginating onto
  * A4. If a print preview ever looks page-shaped, this rule did not apply.
  */
-function receiptCss(paper: PaperWidth): string {
+function receiptCss(paper: PaperWidth, fixedPageSize = true): string {
+  /*
+   * `fixedPageSize` is false on Android.
+   *
+   * `@page { size: 58mm auto }` is what makes a desktop browser emit one
+   * continuous receipt instead of paginating onto A4, and on a desktop it is
+   * load-bearing. Android cannot honour it: the system print service
+   * negotiates a real paper size with the selected printer, and a job
+   * demanding an arbitrary custom page is rejected outright — which surfaces
+   * as "there was a problem printing this page" with no further detail.
+   *
+   * So Android gets no `@page` rule and no fixed `width`. The receipt then
+   * flows to whatever width the chosen paper actually is. A thermal roll
+   * selected in the Android print dialog still prints correctly; A4 prints
+   * the receipt at the top of a sheet, which is the honest fallback for a
+   * phone printing to an office printer.
+   */
+  const page = fixedPageSize
+    ? `@page { size: ${paper}mm auto; margin: 0; }`
+    : `@page { margin: 4mm; }`;
+
+  const width = fixedPageSize ? `width: ${paper}mm;` : `width: 100%; max-width: ${paper}mm;`;
+
   return `
-    @page { size: ${paper}mm auto; margin: 0; }
+    ${page}
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
-      width: ${paper}mm;
+      ${width}
       background: #fff;
       color: #000;
     }
@@ -42,7 +64,7 @@ function receiptCss(paper: PaperWidth): string {
       font-family: ui-monospace, "Courier New", Courier, monospace;
       font-size: ${paper === 58 ? 11 : 12}px;
       line-height: 1.35;
-      padding: 4mm 3mm;
+      padding: ${fixedPageSize ? '4mm 3mm' : '0'};
       -webkit-font-smoothing: none;
     }
   `;
@@ -104,19 +126,26 @@ function printViaWindow(html: string, paper: PaperWidth): Promise<void> {
     win.document.write(
       `<!doctype html><html><head><meta charset="utf-8">` +
         `<meta name="viewport" content="width=device-width,initial-scale=1">` +
-        `<title>Receipt</title><style>${receiptCss(paper)}</style></head>` +
+        // No fixed @page: Android's print service rejects a custom page size.
+        `<title>Receipt</title><style>${receiptCss(paper, false)}</style></head>` +
         `<body>${html}</body></html>`,
     );
     win.document.close();
 
-    // Resolve as soon as the dialog has been handed over: unlike the iframe
-    // path there is nothing to clean up in this document, and a phone's print
-    // sheet can sit open for a long time.
+    /*
+     * The tab is NOT closed here.
+     *
+     * Android hands the document to the system print service, which reads it
+     * asynchronously and outlives `print()` returning. Closing on `afterprint`
+     * — which Android fires early, if at all — can pull the document out from
+     * under the service mid-job, and the result is the generic "there was a
+     * problem printing this page".
+     *
+     * Leaving the receipt on screen is also the better failure mode: if the
+     * print service is unavailable the user still has the bill in front of
+     * them and can retry from the browser menu.
+     */
     const done = () => resolve();
-    win.addEventListener('afterprint', () => {
-      win.close();
-      done();
-    });
 
     void (async () => {
       await nextFrame();
