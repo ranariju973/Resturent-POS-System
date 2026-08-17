@@ -97,6 +97,13 @@ ticketSchema.virtual('nextStatus').get(function nextStatus() {
 // The kitchen board query: everything not yet served, oldest first.
 ticketSchema.index({ status: 1, placedAt: 1 });
 ticketSchema.index({ placedAt: -1 });
+/**
+ * The board also keeps recently-served tickets visible for a grace period —
+ * getBoard's $or has a { status: SERVED, updatedAt: { $gte } } branch. Served
+ * tickets are the ones that accumulate, so without this index that branch
+ * degrades toward a full scan a little more with every service.
+ */
+ticketSchema.index({ status: 1, updatedAt: -1 });
 
 /** Seed the history with the opening status. */
 ticketSchema.pre('save', function seedHistory(next) {

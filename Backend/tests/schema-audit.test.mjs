@@ -55,7 +55,12 @@ t('no bare Number money field named price/total/amount', !/\b(price|total|subtot
 
 console.log('\n--- indexes declared for the hot queries ---');
 t('Order: status + createdAt', /index\(\{ status: 1, createdAt: -1 \}\)/.test(o));
+// Reports and the dashboard match on paidAt, not createdAt. Without this the
+// index above is a near-miss: right field, wrong sort key, in-memory date filter.
+t('Order: status + paidAt (reports)', /index\(\{ status: 1, paidAt: -1 \}\)/.test(o));
 t('Ticket: status + placedAt', /index\(\{ status: 1, placedAt: 1 \}\)/.test(read('Ticket.js')));
+// The board's grace-period branch for recently-served tickets.
+t('Ticket: status + updatedAt (board)', /index\(\{ status: 1, updatedAt: -1 \}\)/.test(read('Ticket.js')));
 t('Customer: unique phone', /phoneNormalized[\s\S]{0,80}unique: true/.test(read('Customer.js')));
 t('MenuItem: POS grid composite', /index\(\{ isActive: 1, available: 1, category: 1 \}\)/.test(read('MenuItem.js')));
 

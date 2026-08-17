@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Icon } from '../icons/Icon';
 import { usePos } from '../store';
 import { useIsMobile } from '../lib/useViewport';
@@ -20,6 +21,24 @@ export function MenuManagement() {
   const isMobile = useIsMobile();
 
   const itemQuery = state.itemQuery.trim().toLowerCase();
+
+  /**
+   * One tally for the whole sidebar instead of a filter per category.
+   *
+   * The per-category `state.items.filter(...).length` this replaces ran inside
+   * the .map over categories, so it was O(cats × items) on every render.
+   *
+   * The server does send `itemCount` on each category and using it would be
+   * tempting — but saveItem patches `state.items` locally without refetching
+   * categories, so that number goes stale the instant you add an item. Counting
+   * from the same array the list renders from keeps the sidebar honest.
+   */
+  const countByCat = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const i of state.items) counts.set(i.cat, (counts.get(i.cat) ?? 0) + 1);
+    return counts;
+  }, [state.items]);
+
   const inCategory = state.items.filter((i) => i.cat === state.selCat);
   // selCat is a category id, so the heading has to look the name up rather
   // than print the key.
@@ -114,7 +133,7 @@ export function MenuManagement() {
             >
               {state.cats.map((cat) => {
                 const active = cat.id === state.selCat;
-                const count = state.items.filter((i) => i.cat === cat.id).length;
+                const count = countByCat.get(cat.id) ?? 0;
                 const showTools = active || state.hoverCat === cat.id;
                 return (
                   <div

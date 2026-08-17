@@ -22,7 +22,7 @@ import { AuditLog } from '../models/AuditLog.js';
 import { AUDIT_ACTION, ROLE_VALUES, PIN_ROLES } from '../constants/enums.js';
 import { PERMISSIONS, hasPermission } from '../constants/permissions.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
-import { publicUser, publicEmployee } from '../utils/publicUser.js';
+import { publicEmployee } from '../utils/publicUser.js';
 import { assertEmployeeUnreferenced } from '../utils/referenceGuard.js';
 import { escapeRegex } from '../models/Customer.js';
 import { logger } from '../utils/logger.js';

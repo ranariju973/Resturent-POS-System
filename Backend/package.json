@@ -16,7 +16,8 @@
     "seed": "node src/scripts/seed.js",
     "sync-indexes": "node src/scripts/syncIndexes.js",
     "test": "npm run verify",
-    "verify": "for f in tests/*.test.mjs; do node --import ./tests/helpers/register.mjs \"$f\" || exit 1; done",
+    "verify": "node tests/run.mjs",
+    "verify:all": "node tests/run.mjs --integration",
     "test:integration": "node tests/integration/flow.test.mjs",
     "docs": "node scripts/generate-api-docs.mjs"
   },
@@ -39,7 +40,9 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.18.0",
     "eslint": "^9.18.0",
+    "globals": "^14.0.0",
     "nodemon": "^3.1.9"
   },
   "pnpm": {

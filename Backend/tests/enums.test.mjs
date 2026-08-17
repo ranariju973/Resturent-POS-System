@@ -5,7 +5,8 @@ const t=(label,ok)=>{ ok?pass++:fail++; console.log(`${ok?'PASS':'FAIL'} ${label
 
 console.log('--- ticket board is forward-only, one step ---');
 // Walk the whole chain and confirm it terminates at served.
-let s=TICKET_STATUS.PENDING, chain=[s], guard=0;
+let s=TICKET_STATUS.PENDING, guard=0;
+const chain=[s];
 while(NEXT_TICKET_STATUS[s] && guard++<10){ s=NEXT_TICKET_STATUS[s]; chain.push(s); }
 t(`chain = ${chain.join(' -> ')}`, chain.join()==='pending,preparing,ready,served');
 t('served is terminal', NEXT_TICKET_STATUS[TICKET_STATUS.SERVED]===null);

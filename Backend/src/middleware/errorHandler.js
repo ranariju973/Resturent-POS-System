@@ -99,7 +99,10 @@ function normalize(err) {
   return new ApiError(500, 'Something went wrong', { cause: err });
 }
 
-// eslint-disable-next-line no-unused-vars -- Express requires 4 args to treat this as an error handler
+// The four-argument signature is load-bearing: Express decides what is an
+// error handler by reading fn.length, so dropping an unused parameter here
+// would silently demote this to ordinary middleware and every error would fall
+// through to the default handler instead.
 export function errorHandler(err, req, res, next) {
   const apiError = normalize(err);
   const original = apiError.cause || err;

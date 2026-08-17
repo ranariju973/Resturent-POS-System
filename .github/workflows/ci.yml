@@ -1,0 +1,134 @@
+name: CI
+
+# Both apps deploy straight from a push today — Vercel for the SPA, Render for
+# the API — with nothing checking the 1,200 assertions that already exist in
+# Backend/tests. This workflow is that gate.
+#
+# To make it binding you must also flip one switch in each dashboard, because a
+# green check here does not block a deploy on its own:
+#   • Vercel  → Settings → Git → "Only build when checks pass"
+#   • Render  → Settings → Build & Deploy → enable "Wait for CI to pass"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend — lint + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Backend/package.json engines: >=20
+          cache: npm
+          cache-dependency-path: Backend/package-lock.json
+
+      - name: Install
+        working-directory: Backend
+        run: npm ci
+
+      - name: Lint
+        working-directory: Backend
+        run: npm run lint
+
+      # No database service here on purpose: every one of the 22 unit suites
+      # runs green with no mongod at all. They exercise schemas, validators,
+      # route wiring and the RBAC matrix as source and in memory. Standing up
+      # Mongo for them would only make CI slower and flakier.
+      - name: Test
+        working-directory: Backend
+        run: npm run verify
+
+  frontend:
+    name: Frontend — typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      - name: Install
+        working-directory: Frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: Frontend
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: Frontend
+        run: npm run build
+
+  integration:
+    name: Integration (quarantined — 11 known failures)
+    runs-on: ubuntu-latest
+    # QUARANTINED, NOT TRUSTED.
+    #
+    # tests/integration/flow.test.mjs currently reports 78 passed, 11 failed.
+    # Its own header explains why: it "was written in an environment with no
+    # MongoDB available, so it has never been executed". The failures are
+    # therefore unreviewed — they may be stale assertions or they may be real
+    # bugs, and nobody has looked yet.
+    #
+    # Running it red-but-non-blocking keeps it visible instead of forgotten.
+    # Once the 11 are triaged, delete this line so it gates like the rest.
+    continue-on-error: true
+
+    services:
+      mongodb:
+        image: mongo:7
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: Backend/package-lock.json
+
+      - name: Install
+        working-directory: Backend
+        run: npm ci
+
+      - name: Integration suite
+        working-directory: Backend
+        # setup.mjs rewrites the database name to end in _test and refuses to
+        # run if it doesn't, so this can never point at anything real.
+        #
+        # The service container is a standalone mongod, not a replica set, so
+        # order creation logs its STANDALONE warning and degrades to
+        # non-atomic writes. Transaction behaviour is therefore NOT covered
+        # here — that needs a replica set, which is part of the triage above.
+        env:
+          MONGO_URI: mongodb://localhost:27017/restaurant_pos
+          NODE_ENV: test
+          JWT_ACCESS_SECRET: ci-only-access-secret-not-a-real-key-32+
+          JWT_REFRESH_SECRET: ci-only-refresh-secret-not-a-real-key-32+
+          PIN_PEPPER: ci-only-pin-pepper-not-a-real-key-32chars+
+          INVOICE_TOKEN_PEPPER: ci-only-invoice-pepper-not-a-real-key-32+
+          CORS_ORIGIN: http://localhost:8080
+          CLOUDINARY_CLOUD_NAME: ci
+          CLOUDINARY_API_KEY: ci
+          CLOUDINARY_API_SECRET: ci
+        run: npm run test:integration

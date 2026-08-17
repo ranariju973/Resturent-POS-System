@@ -182,6 +182,14 @@ orderSchema.virtual('id').get(function idGetter() {
 
 // Dashboard and reports both scan by status over a date window.
 orderSchema.index({ status: 1, createdAt: -1 });
+/**
+ * Every revenue figure in reportController and dashboardController matches
+ * { status: 'paid', paidAt: { $gte, $lt } } — takings, P&L, byHour, topItems.
+ * The index above has the right leading field but the wrong sort key, so
+ * without this one those queries seek on status and then filter the date range
+ * in memory, reading every paid order ever taken to answer "today".
+ */
+orderSchema.index({ status: 1, paidAt: -1 });
 // Multikey index over the line items, so "has this menu item ever been
 // ordered?" is a lookup rather than a scan of every order ever taken. The
 // purge check depends on it; without it that check gets slower every service.

@@ -31,7 +31,7 @@ import { MenuItem } from '../models/MenuItem.js';
 import { Customer, normalizePhone } from '../models/Customer.js';
 import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
-import { nextSequence, nextSequenceWithDay } from '../models/Counter.js';
+import { nextSequenceWithDay } from '../models/Counter.js';
 import {
   AUDIT_ACTION,
   ORDER_STATUS,

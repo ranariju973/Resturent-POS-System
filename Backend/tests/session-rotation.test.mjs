@@ -162,7 +162,9 @@ console.log('\n--- rotating repeatedly keeps exactly one live token ---');
 {
   const s = createStore();
   s.addUser('u1');
-  let { jti, family } = login(s, 'u1');
+  // jti moves with every rotation; family is fixed for the whole chain.
+  const { family, jti: initialJti } = login(s, 'u1');
+  let jti = initialJti;
 
   for (let i = 0; i < 10; i++) {
     const r = refresh(s, jti);

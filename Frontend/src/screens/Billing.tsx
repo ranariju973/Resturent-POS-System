@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { Icon } from '../icons/Icon';
 import { CONFIG, SHOW_ALL, usePos } from '../store';
 import type { OrderType } from '../data/types';
@@ -48,19 +48,52 @@ export function Billing() {
   const [cartOpen, setCartOpen] = useState(false);
 
   const query = state.query.trim().toLowerCase();
-  const qtyOf = (id: string) => state.cart.find((l) => l.id === id)?.qty ?? 0;
 
-  const products = state.items.filter(
-    (p) =>
-      p.available &&
-      (state.cat === SHOW_ALL || p.cat === state.cat) &&
-      (!query || p.name.toLowerCase().includes(query)),
+  /**
+   * ── Why these are Maps and not .find() ──────────────────────────────────
+   * This screen re-renders on every keystroke in the search box, and every
+   * patch() in the store replaces the whole state object, so "every render"
+   * means most of them.
+   *
+   * qtyOf is called once per rendered product tile. Backed by cart.find() it
+   * was a linear scan per tile — O(products × cart). lines did the same thing
+   * in the other direction, an items.find() per cart line — O(cart × items).
+   * On a 200-item menu with a 20-line cart that is roughly 4,000 comparisons
+   * per keystroke, on the one screen a cashier uses all day.
+   *
+   * Building the index once per change makes each lookup a hash probe, so the
+   * same work becomes O(products + cart).
+   */
+  const qtyById = useMemo(
+    () => new Map(state.cart.map((l) => [l.id, l.qty])),
+    [state.cart],
+  );
+  const qtyOf = (id: string) => qtyById.get(id) ?? 0;
+
+  const itemById = useMemo(
+    () => new Map(state.items.map((i) => [i.id, i])),
+    [state.items],
   );
 
-  const lines = state.cart.flatMap((line) => {
-    const item = state.items.find((x) => x.id === line.id);
-    return item ? [{ line, item, lineTotal: item.price * line.qty }] : [];
-  });
+  const products = useMemo(
+    () =>
+      state.items.filter(
+        (p) =>
+          p.available &&
+          (state.cat === SHOW_ALL || p.cat === state.cat) &&
+          (!query || p.name.toLowerCase().includes(query)),
+      ),
+    [state.items, state.cat, query],
+  );
+
+  const lines = useMemo(
+    () =>
+      state.cart.flatMap((line) => {
+        const item = itemById.get(line.id);
+        return item ? [{ line, item, lineTotal: item.price * line.qty }] : [];
+      }),
+    [state.cart, itemById],
+  );
 
   const open = state.activeOrder;
 

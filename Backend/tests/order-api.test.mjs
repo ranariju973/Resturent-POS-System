@@ -33,10 +33,12 @@ import {
   voidSchema,
   listOrdersSchema,
 } from '../src/validators/orders.js';
+// CASHIER_VOID_WINDOW_MINUTES is deliberately not imported: the void-window
+// assertion below greps the controller source for the identifier rather than
+// comparing against the value, so importing it here only looks like coverage.
 import {
   CASHIER_MAX_DISCOUNT_PERCENT,
   CASHIER_MAX_DISCOUNT_MINOR,
-  CASHIER_VOID_WINDOW_MINUTES,
 } from '../src/config/pos.js';
 import { percentOf, toMajor } from '../src/utils/money.js';
 

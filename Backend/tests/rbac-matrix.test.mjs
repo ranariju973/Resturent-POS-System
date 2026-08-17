@@ -80,7 +80,7 @@ const SPEC = {
 
 console.log('--- every permission x every role ---');
 let cells = 0;
-let mismatches = [];
+const mismatches = [];
 for (const [permission, allowed] of Object.entries(SPEC)) {
   for (const role of ROLE_VALUES) {
     const expected = allowed.includes(role);
