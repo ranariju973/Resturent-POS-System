@@ -1118,7 +1118,7 @@ function usePosState() {
 
         patch({ checkoutPending: true });
         try {
-          const { order } = await ordersApi.createOrder({
+          const { order, table } = await ordersApi.createOrder({
             type: s.orderType,
             tableId: s.orderType === 'dine-in' ? (s.orderTable ?? undefined) : undefined,
             // Picked from the list: attach by id. The suggest endpoint never
@@ -1137,24 +1137,38 @@ function usePosState() {
                   }
                 : undefined,
             items: s.cart.map((l) => ({ menuItemId: l.id, qty: l.qty, note: l.note })),
+            // Sent with the order rather than PATCHed onto it afterwards, so
+            // the bill is never briefly persisted at the undiscounted total.
+            // The server applies it inside the same transaction and runs the
+            // same ceiling check the separate endpoint did.
+            discount:
+              (parseFloat(s.discountValue) || 0) > 0
+                ? {
+                    type: s.discountMode === 'pct' ? 'percent' : 'fixed',
+                    value: s.discountValue.trim(),
+                  }
+                : undefined,
           });
 
-          const value = parseFloat(s.discountValue) || 0;
-          const withDiscount =
-            value > 0
-              ? await ordersApi.setDiscount(order.id, {
-                  type: s.discountMode === 'pct' ? 'percent' : 'fixed',
-                  value: s.discountValue.trim(),
-                })
-              : order;
-
-          patch({ activeOrder: withDiscount, checkoutPending: false, lastPrintable: null });
-          flash(`Bill #${withDiscount.orderNo} opened`);
-
-          // The floor and the board both changed: the table is now seated and
-          // a ticket exists.
-          void actions.loadTables();
-          void actions.loadBoard();
+          patch({
+            activeOrder: order,
+            checkoutPending: false,
+            lastPrintable: null,
+            /*
+             * The floor is patched from the response, not refetched.
+             *
+             * This used to be loadTables() + loadBoard() — three more requests
+             * (tables, zones, board) whose only job was to discover that the
+             * table this response already describes is now occupied. The board
+             * refetch was pure waste from here: only the Kitchen screen reads
+             * `tickets`, and it has its own SSE stream that the server already
+             * notified via announceNewTicket.
+             */
+            ...(table
+              ? { tables: ref.current.tables.map((t) => (t.id === table.id ? table : t)) }
+              : {}),
+          });
+          flash(`Bill #${order.orderNo} opened`);
         } catch (err) {
           patch({ checkoutPending: false });
           // A discount above the ceiling comes back 403 with the server's own
@@ -1853,14 +1867,27 @@ function usePosState() {
 
       closePanel: () => patch({ selTable: null, panel: 'summary', tableOrder: null }),
 
-      loadTables: async () => {
+      /**
+       * Reload the floor.
+       *
+       * `withZones` was two separate requests until the server learned to
+       * return both. Zones are asked for only when we do not have them yet:
+       * TableManagement re-polls this every 15 seconds, and re-fetching a list
+       * of zone names that changes when an admin adds a table — so, rarely —
+       * is a request per poll spent confirming nothing moved.
+       */
+      loadTables: async (opts?: { withZones?: boolean }) => {
+        // Default: only when we have none. Callers that just changed which
+        // zones exist — saveTable, deleteTable — ask for them explicitly.
+        const needZones = opts?.withZones ?? ref.current.zones.length === 0;
         patch({ tablesLoading: true, tablesError: '' });
         try {
-          const [tables, zones] = await Promise.all([
-            tablesApi.listTables(),
-            tablesApi.listZones(),
-          ]);
-          patch({ tables, zones, tablesLoading: false });
+          const { tables, zones } = await tablesApi.listTables({ withZones: needZones });
+          patch({
+            tables,
+            ...(zones ? { zones } : {}),
+            tablesLoading: false,
+          });
         } catch (err) {
           patch({ tablesLoading: false, tablesError: describe(err, 'Could not load the floor.') });
         }
@@ -1916,8 +1943,10 @@ function usePosState() {
           }
           patch({ tblSaving: false, modal: null });
           // Refetch rather than patching in place: a new zone changes the
-          // filter row, and the server uppercases table names.
-          void actions.loadTables();
+          // filter row, and the server uppercases table names. withZones
+          // because this is one of the two operations that can change which
+          // zones exist at all.
+          void actions.loadTables({ withZones: true });
         } catch (err) {
           // Held open with the message inline — a duplicate name, or an
           // occupied table being reconfigured, both come back as a 409 the
@@ -1945,6 +1974,10 @@ function usePosState() {
             modal: null,
           });
           flash('Table removed');
+          // Removing the last table in a zone removes the zone, so the filter
+          // row has to be told. Fire-and-forget: the tile is already gone from
+          // the patch above, so this only reconciles the zone list.
+          void actions.loadTables({ withZones: true });
         } catch (err) {
           patch({ tblBusyId: null });
           flash(describe(err, 'Could not remove that table.'));

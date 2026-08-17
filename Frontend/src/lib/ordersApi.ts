@@ -12,8 +12,9 @@
  * its own endpoint, a ceiling, and a manager-override path.
  */
 import { api } from './api';
-import type { OrderDto } from './dto';
-import type { OrderType } from '../data/types';
+import { toTable } from './dto';
+import type { OrderDto, TableDto } from './dto';
+import type { OrderType, Table } from '../data/types';
 
 export type PaymentMethod = 'cash' | 'card' | 'upi';
 
@@ -70,11 +71,22 @@ export async function createOrder(input: {
    */
   customer?: { phone: string; name?: string };
   items: OrderLineInput[];
-}): Promise<{ order: Order; ticketId: string }> {
-  return api<{ order: OrderDto; ticketId: string }>('/api/orders', {
-    method: 'POST',
-    body: input,
-  });
+  /**
+   * An opening discount, applied inside the same transaction as the order.
+   *
+   * Sending it here rather than following up with `setDiscount` is what keeps
+   * opening a bill to one request. The server runs the identical ceiling check
+   * either way, so an over-limit discount still needs `adminOverridePin`.
+   */
+  discount?: { type: 'percent' | 'fixed'; value: string; adminOverridePin?: string };
+}): Promise<{ order: Order; ticketId: string; table: Table | null }> {
+  const data = await api<{ order: OrderDto; ticketId: string; table: TableDto | null }>(
+    '/api/orders',
+    { method: 'POST', body: input },
+  );
+  // Mapped here rather than in the store, the same way listTables does it —
+  // DTO shapes stay inside lib/, and the store only ever sees domain types.
+  return { ...data, table: data.table ? toTable(data.table) : null };
 }
 
 /** Replace every line on an open order — the cart being edited. */

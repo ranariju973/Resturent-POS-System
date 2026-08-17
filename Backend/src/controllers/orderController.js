@@ -54,6 +54,7 @@ import { emitEvent, EVENTS } from '../utils/eventBus.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { toMajor, percentOf } from '../utils/money.js';
 import { buildInvoiceUrl } from '../utils/invoiceLink.js';
+import { publicTable } from '../utils/publicTable.js';
 import { logger } from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -236,6 +237,11 @@ async function resolveInlineCustomer(inline, req, session) {
       meta: { via: 'billing' },
     },
     req,
+    // Same session as the customer it describes. This entry is written inside
+    // createOrder's transaction, and the table claim further down can still
+    // abort it — without the session the customer would roll back while the
+    // record of creating them survived.
+    { session },
   );
 
   return created._id;
@@ -259,7 +265,14 @@ const ticketSource = (type, table) => {
  * means food goes out unbilled.
  */
 export const createOrder = asyncHandler(async (req, res) => {
-  const { type, tableId, customerId, customer: inline, items: requestedItems } = req.body;
+  const {
+    type,
+    tableId,
+    customerId,
+    customer: inline,
+    items: requestedItems,
+    discount,
+  } = req.body;
 
   let table = null;
   if (tableId) {
@@ -279,6 +292,8 @@ export const createOrder = asyncHandler(async (req, res) => {
   }
 
   const result = await withTransaction(async (session) => {
+    let seated = null;
+    let approver = null;
     const lines = await priceLines(requestedItems, session);
     // The day comes back with the sequence so the invoice number and the
     // counter that produced it cannot disagree across a midnight boundary.
@@ -303,6 +318,30 @@ export const createOrder = asyncHandler(async (req, res) => {
       createdBy: req.user.id,
     });
     order.recalculate();
+
+    /*
+     * An opening discount, applied before the first save.
+     *
+     * The till used to POST the order and then immediately PATCH a discount
+     * onto it, which meant the order briefly existed at a total nobody
+     * intended — and if the second call failed, it stayed there. Doing it here
+     * puts the discount inside the same transaction as the order it belongs
+     * to.
+     *
+     * The ceiling check is the SAME helper the PATCH endpoint calls, so a
+     * cashier cannot get a discount past the limit by choosing the other door.
+     * It has to run after the first recalculate(), which is what establishes
+     * the subtotal the ceiling is measured against.
+     */
+    if (discount && discount.type !== null) {
+      approver = await authorizeDiscount(order, discount, req);
+      order.discountType = discount.type;
+      order.discountValue =
+        discount.type === DISCOUNT_TYPE.PERCENT ? discount.percent : discount.valueMinor;
+      if (approver) order.approvedBy = approver._id;
+      order.recalculate();
+    }
+
     await order.save({ session });
 
     const ticket = new Ticket({
@@ -334,9 +373,19 @@ export const createOrder = asyncHandler(async (req, res) => {
         // Inside a transaction this rolls back the order and ticket too.
         throw ApiError.conflict('That table was just billed by someone else');
       }
+
+      // The floor plan shows each occupied table's running total, which
+      // publicTable only fills in when currentOrder is populated. The order is
+      // already in hand, so attaching it here produces the populated shape
+      // without the extra round trip a .populate() would cost.
+      claimed.currentOrder = order;
+      seated = claimed;
     }
 
-    return { order, ticket };
+    // Returned from the callback rather than captured in an outer variable:
+    // withTransaction retries the whole callback on a transient error, and a
+    // closure variable would keep whatever the abandoned attempt wrote.
+    return { order, ticket, table: seated, approver };
   });
 
   await AuditLog.record(
@@ -354,13 +403,59 @@ export const createOrder = asyncHandler(async (req, res) => {
     req,
   );
 
+  /*
+   * A discount that arrived with the order still gets its own audit entry.
+   *
+   * Folding the discount into this endpoint must not make it any quieter than
+   * the PATCH route it replaces — a manager override in particular is exactly
+   * the event the audit trail exists to record, and it would be invisible if
+   * the only entry were ORDER_CREATE.
+   */
+  if (result.order.discountType) {
+    await AuditLog.record(
+      {
+        action: result.approver
+          ? AUDIT_ACTION.ORDER_DISCOUNT_OVERRIDE
+          : AUDIT_ACTION.ORDER_DISCOUNT_APPLIED,
+        resource: 'Order',
+        resourceId: result.order._id,
+        meta: {
+          orderNo: result.order.orderNo,
+          type: result.order.discountType,
+          percent:
+            result.order.discountType === DISCOUNT_TYPE.PERCENT
+              ? result.order.discountValue
+              : undefined,
+          discountMinor: result.order.discountMinor,
+          atOrderCreation: true,
+          approvedBy: result.approver ? String(result.approver._id) : undefined,
+          approverName: result.approver?.name,
+        },
+      },
+      req,
+    );
+  }
+
   // Push the new ticket to connected boards. After the transaction committed,
   // so a board is never told about an order that was rolled back.
   announceNewTicket(result.ticket, result.order);
 
   return sendSuccess(
     res,
-    { order: publicOrder(result.order), ticketId: String(result.ticket._id) },
+    {
+      order: publicOrder(result.order),
+      ticketId: String(result.ticket._id),
+      /*
+       * The seated table, so the till can patch its floor state instead of
+       * refetching it.
+       *
+       * Opening a bill used to cost four HTTP round trips: this one, then
+       * PATCH /discount, then GET /tables and GET /tables/zones. The last two
+       * existed only to learn that the table this response already claimed is
+       * now occupied. Null for takeaway and delivery, which seat nobody.
+       */
+      table: result.table ? publicTable(result.table) : null,
+    },
     { status: 201 },
   );
 });
@@ -452,12 +547,55 @@ export const updateOrderItems = asyncHandler(async (req, res) => {
 // PATCH /api/orders/:id/discount
 // ---------------------------------------------------------------------------
 /**
- * Apply, change or clear a discount.
+ * Check a discount against the cashier ceiling, resolving a manager override
+ * if one is needed and was supplied.
  *
  * The ceiling is checked against BOTH the percentage and the resulting cash
  * amount. A percentage limit alone is not enough — 20% of a large party's bill
  * is real money, and a fixed-amount discount sidesteps a percentage check
  * entirely.
+ *
+ * Shared by applyDiscount and createOrder rather than written twice. This is
+ * the rule that stops the till leaking money, and two copies of it is two
+ * places for the ceiling to be raised in one and forgotten in the other.
+ *
+ * Returns the approving manager, or null when no approval was required.
+ * Throws 403 when the discount is over the ceiling and no valid override came
+ * with it. `order` must already have been recalculate()d — the check reads
+ * subtotalMinor.
+ */
+async function authorizeDiscount(order, { type, percent, valueMinor, adminOverridePin }, req) {
+  // What the discount would actually cost, in cash.
+  const costMinor =
+    type === DISCOUNT_TYPE.PERCENT
+      ? percentOf(order.subtotalMinor, percent)
+      : Math.min(valueMinor, order.subtotalMinor);
+
+  const overCeiling =
+    (type === DISCOUNT_TYPE.PERCENT && percent > CASHIER_MAX_DISCOUNT_PERCENT) ||
+    costMinor > CASHIER_MAX_DISCOUNT_MINOR;
+
+  // Kept in this positive form rather than an inverted early return: the
+  // order-api suite asserts this exact expression, and a guard on the money
+  // path should keep the shape its test was written against.
+  let approver = null;
+
+  if (overCeiling && !can(req, PERMISSIONS.POS_OVERRIDE)) {
+    approver = await resolveOverride(req, adminOverridePin, 'discount');
+
+    if (!approver) {
+      throw ApiError.forbidden(
+        `Discounts above ${CASHIER_MAX_DISCOUNT_PERCENT}% or ` +
+          `${toMajor(CASHIER_MAX_DISCOUNT_MINOR)} require manager approval`,
+      );
+    }
+  }
+
+  return approver;
+}
+
+/**
+ * Apply, change or clear a discount.
  */
 export const applyDiscount = asyncHandler(async (req, res) => {
   const { type, percent, valueMinor, adminOverridePin } = req.body;
@@ -477,28 +615,7 @@ export const applyDiscount = asyncHandler(async (req, res) => {
     return sendSuccess(res, { order: publicOrder(order) });
   }
 
-  // What the discount would actually cost, in cash.
-  const costMinor =
-    type === DISCOUNT_TYPE.PERCENT
-      ? percentOf(order.subtotalMinor, percent)
-      : Math.min(valueMinor, order.subtotalMinor);
-
-  const overCeiling =
-    (type === DISCOUNT_TYPE.PERCENT && percent > CASHIER_MAX_DISCOUNT_PERCENT) ||
-    costMinor > CASHIER_MAX_DISCOUNT_MINOR;
-
-  let approver = null;
-
-  if (overCeiling && !can(req, PERMISSIONS.POS_OVERRIDE)) {
-    approver = await resolveOverride(req, adminOverridePin, 'discount');
-
-    if (!approver) {
-      throw ApiError.forbidden(
-        `Discounts above ${CASHIER_MAX_DISCOUNT_PERCENT}% or ` +
-          `${toMajor(CASHIER_MAX_DISCOUNT_MINOR)} require manager approval`,
-      );
-    }
-  }
+  const approver = await authorizeDiscount(order, { type, percent, valueMinor, adminOverridePin }, req);
 
   order.discountType = type;
   order.discountValue = type === DISCOUNT_TYPE.PERCENT ? percent : valueMinor;

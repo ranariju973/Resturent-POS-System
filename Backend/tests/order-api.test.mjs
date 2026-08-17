@@ -281,6 +281,23 @@ t('a lost table claim aborts the whole order',
   /was just billed by someone else/.test(ctl));
 t('payment frees the table in the same transaction',
   /payOrder[\s\S]{0,1500}withTransaction[\s\S]{0,900}Table\.updateOne/.test(code));
+// The audit row for an inline customer is written inside createOrder's
+// transaction. Without the session it commits on its own, so a later abort
+// (a lost table claim) leaves a record of creating someone who does not exist.
+t('the in-transaction audit entry carries the session',
+  /CUSTOMER_CREATE[\s\S]{0,400}\{ session \}/.test(code));
+t('AuditLog.record accepts a session', /record\(entry, req, options = \{\}\)/.test(
+  fs.readFileSync(path.join(ROOT, 'src/models/AuditLog.js'), 'utf8')));
+
+console.log('\n--- the bill opens in one round trip ---');
+// Opening a bill used to cost four requests: create, then PATCH the discount,
+// then GET /tables and GET /tables/zones to learn the table was now seated.
+t('the seated table comes back with the order', /table: result\.table \? publicTable/.test(code));
+t('createOrder accepts an opening discount',
+  /discount: discountSchema\.optional\(\)/.test(
+    fs.readFileSync(path.join(ROOT, 'src/validators/orders.js'), 'utf8')));
+t('the table serialiser is shared, not copied',
+  /from '\.\.\/utils\/publicTable\.js'/.test(ctl));
 
 console.log('\n--- discount and void authority ---');
 t('the ceiling checks BOTH percent and cash', /overCeiling =[\s\S]{0,200}costMinor > CASHIER_MAX_DISCOUNT_MINOR/.test(code));
@@ -292,6 +309,16 @@ t('an open tab can be voided without approval (nothing was taken)',
 t('a paid void outside the window is admin-only',
   /CASHIER_VOID_WINDOW_MINUTES/.test(code));
 t('failed override attempts are audited', /bad-override-pin/.test(code));
+// An opening discount arrives with the order, so the ceiling has to be
+// enforced on that path too — and by the SAME code, or the two doors drift
+// apart and one of them ends up cheaper than the other.
+t('the ceiling rule exists exactly once', (code.match(/costMinor > CASHIER_MAX_DISCOUNT_MINOR/g) ?? []).length === 1);
+t('createOrder authorises its discount through that one rule',
+  /createOrder[\s\S]{0,3000}authorizeDiscount\(order, discount, req\)/.test(code));
+t('the opening discount is applied before the order is first saved',
+  /authorizeDiscount[\s\S]{0,400}recalculate\(\)[\s\S]{0,80}await order\.save\(\{ session \}\)/.test(code));
+t('an opening discount still writes its own audit entry',
+  /ORDER_DISCOUNT_OVERRIDE[\s\S]{0,200}ORDER_DISCOUNT_APPLIED/.test(code));
 t('override failure returns null, so 403s stay generic',
   /if \(!valid\) \{[\s\S]{0,400}return null;/.test(code));
 

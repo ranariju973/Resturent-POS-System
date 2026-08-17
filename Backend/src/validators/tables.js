@@ -58,6 +58,16 @@ export const listTablesSchema = z
     zone: zone.optional(),
     status: z.enum(TABLE_STATUS_VALUES).optional(),
     includeInactive: z.enum(['true', 'false']).optional(),
+    /*
+     * Return the zone list alongside the tables.
+     *
+     * The floor screen needs both, and fetching them separately was two HTTP
+     * round trips for one screen. Opt-in rather than always-on because the
+     * floor plan re-polls every 15 seconds and the zone list only changes when
+     * an admin adds or renames a table — the poll should not keep paying for a
+     * distinct() that answers the same thing every time.
+     */
+    withZones: z.enum(['true', 'false']).optional(),
   })
   .strict();
 

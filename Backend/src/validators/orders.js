@@ -74,36 +74,6 @@ const inlineCustomer = z
   })
   .strict();
 
-export const createOrderSchema = z
-  .object({
-    type: z.enum(ORDER_TYPE_VALUES, { errorMap: () => ({ message: 'Invalid order type' }) }),
-    tableId: objectId.optional(),
-    customerId: objectId.optional(),
-    customer: inlineCustomer.optional(),
-    items,
-  })
-  .strict()
-  // Both would be two different answers to "who is this order for". Rather
-  // than silently picking one, refuse — a client sending both has a bug, and
-  // resolving it quietly means shipping that bug attached to someone's bill.
-  .refine((body) => !(body.customerId && body.customer), {
-    message: 'Send either customerId or customer, not both',
-    path: ['customer'],
-  })
-  // A dine-in order without a table has nowhere to be served; a takeaway with
-  // one blocks a table that nobody is sitting at.
-  .refine((body) => body.type !== 'dine-in' || Boolean(body.tableId), {
-    message: 'A dine-in order needs a table',
-    path: ['tableId'],
-  })
-  .refine((body) => body.type === 'dine-in' || !body.tableId, {
-    message: 'Only dine-in orders may be attached to a table',
-    path: ['tableId'],
-  });
-
-/** Replace the lines on an open order — the cart being edited. */
-export const updateItemsSchema = z.object({ items }).strict();
-
 /**
  * Apply or clear a discount.
  *
@@ -113,6 +83,10 @@ export const updateItemsSchema = z.object({ items }).strict();
  *
  * `adminOverridePin` is the manager-approval path for a discount above the
  * cashier ceiling. Absent on ordinary discounts.
+ *
+ * Declared above createOrderSchema because that schema embeds it — a const is
+ * in its temporal dead zone until evaluated, so a forward reference here would
+ * throw at import rather than at request time.
  */
 export const discountSchema = z
   .object({
@@ -167,6 +141,49 @@ export const discountSchema = z
     }
     return { type: DISCOUNT_TYPE.FIXED, valueMinor: toMinor(amount), percent: 0, adminOverridePin: body.adminOverridePin };
   });
+
+export const createOrderSchema = z
+  .object({
+    type: z.enum(ORDER_TYPE_VALUES, { errorMap: () => ({ message: 'Invalid order type' }) }),
+    tableId: objectId.optional(),
+    customerId: objectId.optional(),
+    customer: inlineCustomer.optional(),
+    items,
+    /*
+     * An opening discount, so the till does not have to POST the order and
+     * then immediately PATCH a discount onto it.
+     *
+     * Reuses discountSchema rather than restating its shape: the percent/fixed
+     * parsing, the two-decimal rule and the override-PIN format are all rules
+     * about what a discount IS, and they should not be able to differ
+     * depending on which endpoint the discount arrived through.
+     *
+     * `type: null` is permitted by that schema (it is how the other endpoint
+     * clears a discount) and simply means "no discount" here.
+     */
+    discount: discountSchema.optional(),
+  })
+  .strict()
+  // Both would be two different answers to "who is this order for". Rather
+  // than silently picking one, refuse — a client sending both has a bug, and
+  // resolving it quietly means shipping that bug attached to someone's bill.
+  .refine((body) => !(body.customerId && body.customer), {
+    message: 'Send either customerId or customer, not both',
+    path: ['customer'],
+  })
+  // A dine-in order without a table has nowhere to be served; a takeaway with
+  // one blocks a table that nobody is sitting at.
+  .refine((body) => body.type !== 'dine-in' || Boolean(body.tableId), {
+    message: 'A dine-in order needs a table',
+    path: ['tableId'],
+  })
+  .refine((body) => body.type === 'dine-in' || !body.tableId, {
+    message: 'Only dine-in orders may be attached to a table',
+    path: ['tableId'],
+  });
+
+/** Replace the lines on an open order — the cart being edited. */
+export const updateItemsSchema = z.object({ items }).strict();
 
 /** Settle the bill. */
 export const paySchema = z

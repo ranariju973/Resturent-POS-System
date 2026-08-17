@@ -30,33 +30,7 @@ import { can } from '../middleware/rbac.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { splitMinor, toMajor } from '../utils/money.js';
 import { assertTableUnreferenced } from '../utils/referenceGuard.js';
-
-/**
- * The table shape sent to clients.
- * `occupiedMinutes` is derived rather than stored, so the elapsed badge on the
- * floor plan cannot drift from reality.
- */
-function publicTable(table) {
-  const order = table.currentOrder;
-  const populated = order && typeof order === 'object' && 'totalMinor' in order;
-
-  return {
-    id: String(table._id),
-    name: table.name,
-    seats: table.seats,
-    zone: table.zone,
-    status: table.status,
-    occupiedAt: table.occupiedAt,
-    occupiedMinutes: table.occupiedAt
-      ? Math.floor((Date.now() - new Date(table.occupiedAt).getTime()) / 60000)
-      : null,
-    mergedInto: table.mergedInto ? String(table.mergedInto) : null,
-    currentOrder: order ? (populated ? String(order._id) : String(order)) : null,
-    orderTotalMinor: populated ? order.totalMinor : undefined,
-    orderTotal: populated ? toMajor(order.totalMinor) : undefined,
-    orderItemCount: populated ? order.items.length : undefined,
-  };
-}
+import { publicTable } from '../utils/publicTable.js';
 
 /** Load a live table or 404. */
 async function loadTable(id) {
@@ -68,8 +42,16 @@ async function loadTable(id) {
 // ---------------------------------------------------------------------------
 // GET /api/tables
 // ---------------------------------------------------------------------------
+/**
+ * A dining room has tens of tables, not thousands, so this is a ceiling
+ * against a pathological or malicious dataset rather than real pagination —
+ * the floor plan is meaningless partially drawn, so there is no "next page"
+ * for it to show.
+ */
+const MAX_TABLES = 500;
+
 export const listTables = asyncHandler(async (req, res) => {
-  const { zone, status, includeInactive } = req.query;
+  const { zone, status, includeInactive, withZones } = req.query;
 
   const filter = {};
   // Deleted tables are admin-only, and only on request.
@@ -77,11 +59,25 @@ export const listTables = asyncHandler(async (req, res) => {
   if (zone) filter.zone = zone;
   if (status) filter.status = status;
 
-  const tables = await Table.find(filter)
-    .populate('currentOrder', 'totalMinor items orderNo')
-    .sort({ zone: 1, name: 1 });
+  /*
+   * The zone list is deliberately NOT derived from `tables` below. This
+   * response is filterable, and the zones feed the control that does the
+   * filtering — deriving them from a zone-filtered result would leave the
+   * picker showing only the zone already selected, with no way back.
+   */
+  const [tables, zones] = await Promise.all([
+    Table.find(filter)
+      .populate('currentOrder', 'totalMinor items orderNo')
+      .sort({ zone: 1, name: 1 })
+      .limit(MAX_TABLES),
+    withZones === 'true' ? Table.distinct('zone', { isActive: true }) : null,
+  ]);
 
-  return sendSuccess(res, { tables: tables.map(publicTable), count: tables.length });
+  return sendSuccess(res, {
+    tables: tables.map(publicTable),
+    count: tables.length,
+    ...(zones ? { zones: zones.sort() } : {}),
+  });
 });
 
 // ---------------------------------------------------------------------------

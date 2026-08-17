@@ -16,17 +16,25 @@ import type { TableDto } from './dto';
 import { toTable } from './dto';
 import type { Table } from '../data/types';
 
+/**
+ * `withZones` folds the zone list into this response instead of costing a
+ * second request. Opt in on a first load, leave it off for the floor plan's
+ * 15-second poll — the tables change constantly, the zone names almost never.
+ */
 export async function listTables(
-  filter: { zone?: string; status?: string } = {},
+  filter: { zone?: string; status?: string; withZones?: boolean } = {},
   signal?: AbortSignal,
-): Promise<Table[]> {
+): Promise<{ tables: Table[]; zones?: string[] }> {
   const qs = new URLSearchParams();
   if (filter.zone && filter.zone !== 'All') qs.set('zone', filter.zone);
   if (filter.status) qs.set('status', filter.status);
+  if (filter.withZones) qs.set('withZones', 'true');
 
   const suffix = qs.toString() ? `?${qs}` : '';
-  const data = await api<{ tables: TableDto[] }>(`/api/tables${suffix}`, { signal });
-  return data.tables.map(toTable);
+  const data = await api<{ tables: TableDto[]; zones?: string[] }>(`/api/tables${suffix}`, {
+    signal,
+  });
+  return { tables: data.tables.map(toTable), zones: data.zones };
 }
 
 /** Zone names in use. Declared before /:id server-side, so 'zones' is not an id. */

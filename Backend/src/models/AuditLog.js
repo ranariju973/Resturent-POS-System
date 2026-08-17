@@ -135,10 +135,17 @@ auditLogSchema.pre('findOneAndUpdate', blockUpdate);
  * Write an entry. Never throws into the caller — a failed audit write must
  * not take down the operation being audited, but it must be loud in the logs.
  *
+ * Pass the session when recording something that happened inside a
+ * transaction. Without it the entry commits independently, so a transaction
+ * that later aborts leaves an audit row describing a write that was rolled
+ * back — a customer created for an order that never existed, for instance.
+ * The audit trail then disagrees with the data it is supposed to explain.
+ *
  * @param {object} entry
  * @param {import('express').Request} [req] pulls ip / userAgent / requestId / actor
+ * @param {{ session?: import('mongoose').ClientSession }} [options]
  */
-auditLogSchema.statics.record = async function record(entry, req) {
+auditLogSchema.statics.record = async function record(entry, req, options = {}) {
   try {
     const doc = new this({
       ...entry,
@@ -150,7 +157,7 @@ auditLogSchema.statics.record = async function record(entry, req) {
       requestId: entry.requestId ?? req?.id ?? '',
       at: entry.at ?? new Date(),
     });
-    await doc.save();
+    await doc.save(options.session ? { session: options.session } : {});
     return doc;
   } catch (err) {
     const { logger } = await import('../utils/logger.js');

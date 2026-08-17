@@ -277,5 +277,24 @@ t('seating actions use TABLE_MANAGE_SEATING',
   (routes.match(/TABLE_MANAGE_SEATING/g) ?? []).length === 7);
 t('reads use TABLE_VIEW', (routes.match(/TABLE_VIEW/g) ?? []).length === 3);
 
+console.log('\n--- the floor loads in one round trip ---');
+{
+  const ctl = fs.readFileSync(path.join(ROOT, 'src/controllers/tableController.js'), 'utf8');
+  const val = fs.readFileSync(path.join(ROOT, 'src/validators/tables.js'), 'utf8');
+
+  t('listTables accepts withZones', /withZones: z\.enum\(\['true', 'false'\]\)/.test(val));
+  t('zones come back alongside the tables', /zones: zones\.sort\(\)/.test(ctl));
+  t('zones are opt-in, so the 15s poll does not pay for them',
+    /withZones === 'true' \? Table\.distinct/.test(ctl));
+  /*
+   * The response is filterable and the zones feed the control that filters it.
+   * Deriving them from the returned rows would leave the picker showing only
+   * the zone already selected, with no way back to the others.
+   */
+  t('the zone list is NOT derived from the filtered rows',
+    /Table\.distinct\('zone', \{ isActive: true \}\)/.test(ctl));
+  t('the unbounded find is bounded', /\.limit\(MAX_TABLES\)/.test(ctl));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
