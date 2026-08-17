@@ -145,9 +145,23 @@ t('unknown range param rejected', !ok(rangeSchema, { granularity: 'week' }));
   t('the void count is exposed to the owner', /voidedOrders: voided/.test(rpt));
 
   console.log('\n--- aggregation happens in MongoDB, not in Node ---');
-  t('pipelines are used throughout', (rpt.match(/\.aggregate\(\[/g) ?? []).length >= 8);
+  /*
+   * This used to assert `.aggregate([` appeared at least 8 times, as a proxy
+   * for "the database does the grouping". $facet makes that proxy backwards:
+   * collapsing six passes over one day of orders into one is the improvement,
+   * and it lowers the count. What actually matters is that no aggregation
+   * leaks into Node, which the next two assertions check directly.
+   */
+  t('pipelines are used throughout', (rpt.match(/\.aggregate\(\[/g) ?? []).length >= 6);
   const rptCode = rpt.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
   t('no full-collection fetch-then-reduce', !/await Order\.find\(\)[\s\S]{0,60}reduce/.test(rptCode));
+  t('no report fetches documents to group them in JS',
+    !/await (Order|Expense)\.find\(/.test(rptCode));
+  // Same set of orders, grouped several ways, in one pass rather than one per
+  // grouping. Asserted so a later edit cannot quietly split them back apart.
+  t('daily and monthly group in a single pass', (rptCode.match(/\$facet/g) ?? []).length >= 2);
+  t('the $match stays in front of the $facet (a $facet cannot use an index)',
+    /\$match: paidBetween\(start, end\) \},\s*\{\s*\$facet/.test(rptCode));
 
   console.log('\n--- charts have no gaps to guess at ---');
   t('all 24 hours are present even when empty', /Array\.from\(\{ length: 24 \}/.test(rpt));

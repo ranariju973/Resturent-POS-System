@@ -20,20 +20,14 @@ import { AuditLog } from '../models/AuditLog.js';
 import { AUDIT_ACTION, ORDER_STATUS, EXPENSE_CATEGORY_VALUES } from '../constants/enums.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { toMajor } from '../utils/money.js';
+import { todayIso, dayStart, dayEnd } from '../utils/date.js';
+import { rememberDailyReport, rememberMonthlyReport } from '../utils/statsCache.js';
 
 /** Longest span any range query may cover. */
 const MAX_RANGE_DAYS = 366;
 
-const dayStart = (iso) => new Date(`${iso}T00:00:00`);
-const dayEnd = (iso) => {
-  const d = new Date(`${iso}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  return d;
-};
-const todayIso = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+// Moved to utils/date.js so the stats cache can share the same definition of
+// "today" — see the note there about server local time.
 
 /**
  * Resolve an optional range to concrete bounds, refusing anything unbounded.
@@ -59,62 +53,86 @@ const paidBetween = (start, end) => ({
 // ---------------------------------------------------------------------------
 export const dailyReport = asyncHandler(async (req, res) => {
   const date = req.query.date ?? todayIso();
+  return sendSuccess(res, await rememberDailyReport(date, () => buildDailyReport(date)));
+});
+
+async function buildDailyReport(date) {
   const start = dayStart(date);
   const end = dayEnd(date);
 
-  const [totals, byPayment, byHour, byType, voided, topItems] = await Promise.all([
+  /*
+   * ── One pass, not six ──────────────────────────────────────────────────
+   * These five figures are all different groupings of the SAME set of paid
+   * orders. Run as separate pipelines they were five independent passes over
+   * that set — five index seeks and five scans to answer one screen.
+   *
+   * $facet fans one stream of matched documents out to every sub-pipeline, so
+   * the $match runs once. It stays in front of the $facet deliberately:
+   * $facet cannot use an index itself, so the match has to narrow the set
+   * first — which is exactly what the {status:1, paidAt:-1} index is for.
+   *
+   * The void count is NOT in here. It matches on a different status and on
+   * voidedAt, so it has nothing to share with the others and would have to
+   * widen the match to be folded in.
+   */
+  const [grouped, voided] = await Promise.all([
     Order.aggregate([
       { $match: paidBetween(start, end) },
       {
-        $group: {
-          _id: null,
-          grossMinor: { $sum: '$subtotalMinor' },
-          discountMinor: { $sum: '$discountMinor' },
-          taxMinor: { $sum: '$taxMinor' },
-          netMinor: { $sum: '$totalMinor' },
-          orders: { $sum: 1 },
+        $facet: {
+          totals: [
+            {
+              $group: {
+                _id: null,
+                grossMinor: { $sum: '$subtotalMinor' },
+                discountMinor: { $sum: '$discountMinor' },
+                taxMinor: { $sum: '$taxMinor' },
+                netMinor: { $sum: '$totalMinor' },
+                orders: { $sum: 1 },
+              },
+            },
+          ],
+          byPayment: [
+            { $group: { _id: '$paymentMethod', totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
+            { $sort: { totalMinor: -1 } },
+          ],
+          byHour: [
+            { $group: { _id: { $hour: '$paidAt' }, totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
+            { $sort: { _id: 1 } },
+          ],
+          byType: [{ $group: { _id: '$type', totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } }],
+          topItems: [
+            { $unwind: '$items' },
+            {
+              $group: {
+                _id: '$items.nameSnapshot',
+                qty: { $sum: '$items.qty' },
+                revenueMinor: { $sum: { $multiply: ['$items.priceMinorAtSale', '$items.qty'] } },
+              },
+            },
+            { $sort: { qty: -1 } },
+            { $limit: 10 },
+          ],
         },
       },
     ]).then(([r]) => r ?? {}),
-
-    Order.aggregate([
-      { $match: paidBetween(start, end) },
-      { $group: { _id: '$paymentMethod', totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
-      { $sort: { totalMinor: -1 } },
-    ]),
-
-    Order.aggregate([
-      { $match: paidBetween(start, end) },
-      { $group: { _id: { $hour: '$paidAt' }, totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
-      { $sort: { _id: 1 } },
-    ]),
-
-    Order.aggregate([
-      { $match: paidBetween(start, end) },
-      { $group: { _id: '$type', totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
-    ]),
 
     Order.countDocuments({
       status: ORDER_STATUS.VOIDED,
       voidedAt: mongoose.trusted({ $gte: start, $lt: end }),
     }),
-
-    Order.aggregate([
-      { $match: paidBetween(start, end) },
-      { $unwind: '$items' },
-      {
-        $group: {
-          _id: '$items.nameSnapshot',
-          qty: { $sum: '$items.qty' },
-          revenueMinor: { $sum: { $multiply: ['$items.priceMinorAtSale', '$items.qty'] } },
-        },
-      },
-      { $sort: { qty: -1 } },
-      { $limit: 10 },
-    ]),
   ]);
 
-  return sendSuccess(res, {
+  // $facet always returns one document whose every key is an array, so an
+  // empty day gives empty arrays rather than undefined — but a day with no
+  // orders at all yields no document, hence the ?? on each.
+  const totals = grouped.totals?.[0] ?? {};
+  const byPayment = grouped.byPayment ?? [];
+  const byHour = grouped.byHour ?? [];
+  const byType = grouped.byType ?? [];
+  const topItems = grouped.topItems ?? [];
+
+  return {
     date,
     grossMinor: totals.grossMinor ?? 0,
     gross: toMajor(totals.grossMinor ?? 0),
@@ -149,14 +167,18 @@ export const dailyReport = asyncHandler(async (req, res) => {
       revenueMinor: i.revenueMinor,
       revenue: toMajor(i.revenueMinor),
     })),
-  });
-});
+  };
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/reports/monthly
 // ---------------------------------------------------------------------------
 export const monthlyReport = asyncHandler(async (req, res) => {
   const month = req.query.month ?? todayIso().slice(0, 7);
+  return sendSuccess(res, await rememberMonthlyReport(month, () => buildMonthlyReport(month)));
+});
+
+async function buildMonthlyReport(month) {
   const start = new Date(`${month}-01T00:00:00`);
   const end = new Date(start);
   end.setMonth(end.getMonth() + 1);
@@ -164,37 +186,43 @@ export const monthlyReport = asyncHandler(async (req, res) => {
   const prevStart = new Date(start);
   prevStart.setMonth(prevStart.getMonth() - 1);
 
-  const [totals, prev, daily, byPayment, expenses] = await Promise.all([
+  /*
+   * Three of these five read the same month of paid orders, so they share one
+   * pass via $facet — see dailyReport for the reasoning. The other two cannot
+   * join it: `prev` matches a different month, and `expenses` is a different
+   * collection entirely.
+   */
+  const [grouped, prev, expenses] = await Promise.all([
     Order.aggregate([
       { $match: paidBetween(start, end) },
-      { $group: { _id: null, netMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
-    ]).then(([r]) => r ?? { netMinor: 0, orders: 0 }),
+      {
+        $facet: {
+          totals: [{ $group: { _id: null, netMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } }],
+          daily: [
+            {
+              $group: {
+                _id: { $dayOfMonth: '$paidAt' },
+                totalMinor: { $sum: '$totalMinor' },
+                orders: { $sum: 1 },
+              },
+            },
+            { $sort: { _id: 1 } },
+          ],
+          // The same grouping the daily report does, over the month's bounds.
+          // The monthly tab used to borrow the DAILY split, which showed one
+          // day's figures under a monthly heading whenever it showed anything.
+          byPayment: [
+            { $group: { _id: '$paymentMethod', totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
+            { $sort: { totalMinor: -1 } },
+          ],
+        },
+      },
+    ]).then(([r]) => r ?? {}),
 
     Order.aggregate([
       { $match: paidBetween(prevStart, start) },
       { $group: { _id: null, netMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
     ]).then(([r]) => r ?? { netMinor: 0, orders: 0 }),
-
-    Order.aggregate([
-      { $match: paidBetween(start, end) },
-      {
-        $group: {
-          _id: { $dayOfMonth: '$paidAt' },
-          totalMinor: { $sum: '$totalMinor' },
-          orders: { $sum: 1 },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]),
-
-    // The same grouping the daily report does, over the month's bounds. The
-    // monthly tab used to borrow the DAILY split, which showed one day's
-    // figures under a monthly heading whenever it showed anything at all.
-    Order.aggregate([
-      { $match: paidBetween(start, end) },
-      { $group: { _id: '$paymentMethod', totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
-      { $sort: { totalMinor: -1 } },
-    ]),
 
     Expense.aggregate([
       { $match: { isActive: true, date: mongoose.trusted({ $gte: start, $lt: end }) } },
@@ -202,10 +230,14 @@ export const monthlyReport = asyncHandler(async (req, res) => {
     ]).then(([r]) => r?.totalMinor ?? 0),
   ]);
 
+  const totals = grouped.totals?.[0] ?? { netMinor: 0, orders: 0 };
+  const daily = grouped.daily ?? [];
+  const byPayment = grouped.byPayment ?? [];
+
   const daysInMonth = new Date(end.getTime() - 864e5).getDate();
   const netMinor = totals.netMinor ?? 0;
 
-  return sendSuccess(res, {
+  return {
     month,
     netMinor,
     net: toMajor(netMinor),
@@ -230,8 +262,8 @@ export const monthlyReport = asyncHandler(async (req, res) => {
       total: toMajor(p.totalMinor),
       orders: p.orders,
     })),
-  });
-});
+  };
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/reports/pnl

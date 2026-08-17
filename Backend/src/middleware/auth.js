@@ -22,12 +22,37 @@ import { verifyAccessToken } from '../utils/jwt.js';
 import { ApiError } from '../utils/apiResponse.js';
 import { User } from '../models/User.js';
 import { logger } from '../utils/logger.js';
+import { rememberUser } from '../utils/userCache.js';
 
 /**
  * Pull a bearer token out of the Authorization header.
  * Returns null rather than throwing on a malformed header — a missing and a
  * malformed token get the same generic 401 either way.
  */
+/**
+ * The user behind a token, cached for 30 seconds.
+ *
+ * `.lean()` is not optional here: a Mongoose document is mutable and tracks
+ * its own dirty state, so caching one would hand every concurrent request the
+ * same mutable object. A plain object cannot be accidentally saved or
+ * corrupted by a handler that touches it.
+ *
+ * The explicit field list replaces `.select('+tokenVersion')`. tokenVersion is
+ * select:false, and naming the rest keeps the hashes — passwordHash, pinLookup,
+ * overridePinLookup — out of a cache that lives for 30 seconds, which they
+ * have no reason to be in.
+ *
+ * Any write to a User drops this (see the hooks at the bottom of models/User.js),
+ * so a deactivation or role change still takes effect on the next request.
+ */
+function loadUser(id) {
+  return rememberUser(id, () =>
+    User.findById(id)
+      .select('_id name role isActive tokenVersion email avatarUrl lastLoginAt')
+      .lean(),
+  );
+}
+
 function extractBearer(req) {
   const header = req.get('authorization');
   if (!header) return null;
@@ -65,7 +90,7 @@ export function requireAuth() {
         return next(ApiError.unauthorized());
       }
 
-      const user = await User.findById(payload.sub).select('+tokenVersion');
+      const user = await loadUser(payload.sub);
 
       if (!user) {
         logger.warn('Access token references a missing user', {
@@ -123,7 +148,7 @@ export function optionalAuth() {
 
     try {
       const payload = verifyAccessToken(token);
-      const user = await User.findById(payload.sub).select('+tokenVersion');
+      const user = await loadUser(payload.sub);
 
       if (user?.isActive && (payload.tv ?? 0) === (user.tokenVersion ?? 0)) {
         req.user = {

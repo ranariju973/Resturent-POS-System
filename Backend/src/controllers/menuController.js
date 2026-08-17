@@ -26,6 +26,7 @@ import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { assertMenuItemUnreferenced } from '../utils/referenceGuard.js';
 import { toMajor } from '../utils/money.js';
 import { logger } from '../utils/logger.js';
+import { rememberItems, invalidateMenu, isCacheableItemQuery } from '../utils/menuCache.js';
 import mongoose from 'mongoose';
 
 /**
@@ -95,12 +96,19 @@ export const listItems = asyncHandler(async (req, res) => {
     filter.name = mongoose.trusted({ $regex: escapeRegex(search), $options: 'i' });
   }
 
-  const items = await MenuItem.find(filter)
-    .populate('category', 'name color sortOrder')
-    .sort({ name: 1 })
-    .limit(limit);
+  const read = async () => {
+    const items = await MenuItem.find(filter)
+      .populate('category', 'name color sortOrder')
+      .sort({ name: 1 })
+      .limit(limit);
+    return { items: items.map(publicItem), count: items.length };
+  };
 
-  return sendSuccess(res, { items: items.map(publicItem), count: items.length });
+  // Only the till's plain "give me the menu" is cached; anything filtered or
+  // searched goes straight to the database. See utils/menuCache.js for why.
+  const payload = isCacheableItemQuery(req.query) ? await rememberItems(read) : await read();
+
+  return sendSuccess(res, payload);
 });
 
 // ---------------------------------------------------------------------------
@@ -157,6 +165,7 @@ export const createItem = asyncHandler(async (req, res) => {
     req,
   );
 
+  await invalidateMenu();
   await item.populate('category', 'name color');
   return sendSuccess(res, { item: publicItem(item) }, { status: 201 });
 });
@@ -231,6 +240,7 @@ export const updateItem = asyncHandler(async (req, res) => {
     req,
   );
 
+  await invalidateMenu();
   await item.populate('category', 'name color');
   return sendSuccess(res, { item: publicItem(item) });
 });
@@ -269,6 +279,7 @@ export const setAvailability = asyncHandler(async (req, res) => {
     req,
   );
 
+  await invalidateMenu();
   await item.populate('category', 'name color');
   return sendSuccess(res, { item: publicItem(item) });
 });
@@ -317,6 +328,7 @@ export const deleteItem = asyncHandler(async (req, res) => {
     req,
   );
 
+  await invalidateMenu();
   return sendSuccess(res, { deleted: true, id: String(item._id) });
 });
 
@@ -379,6 +391,7 @@ export const purgeItem = asyncHandler(async (req, res) => {
     req,
   );
 
+  await invalidateMenu();
   return sendSuccess(res, { purged: true, id: String(item._id) });
 });
 

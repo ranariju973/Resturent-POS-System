@@ -448,6 +448,36 @@ export function safeCompare(a, b) {
   return timingSafeEqual(bufA, bufB);
 }
 
+/*
+ * ── Cache invalidation lives on the model, not in the controllers ──────────
+ * middleware/auth.js caches this document for 30 seconds (utils/userCache.js).
+ * That cache is only safe because a deliberate change clears it immediately —
+ * a deactivated account or a demoted cashier must not keep working.
+ *
+ * There are seven places that write a User: the employee create / update /
+ * set-active / set-PIN paths, the delete, revokeTokens() for logout-everywhere,
+ * and the login counters below. Putting an invalidate call at each of them
+ * would work until someone adds an eighth and forgets, and the symptom of
+ * forgetting is a stale permission — quiet, intermittent, and security-shaped.
+ *
+ * Hooking the model instead means any write invalidates, whoever makes it.
+ * Both a document `save()` and the query-level `findOneAndUpdate` used by the
+ * login counters are covered.
+ */
+function dropUserCache() {
+  // Imported lazily: models/index.js is side-effect imported at boot, and a
+  // top-level import here would pull the cache (and its logger) into that
+  // graph earlier than it needs to be.
+  return import('../utils/userCache.js').then((m) => m.invalidateUsers());
+}
+
+userSchema.post('save', dropUserCache);
+userSchema.post('findOneAndUpdate', dropUserCache);
+userSchema.post('updateOne', dropUserCache);
+userSchema.post('updateMany', dropUserCache);
+userSchema.post('deleteOne', dropUserCache);
+userSchema.post('findOneAndDelete', dropUserCache);
+
 export const User = mongoose.model('User', userSchema);
 export { pinLookupHash, BCRYPT_COST, PIN_LENGTH };
 export default User;

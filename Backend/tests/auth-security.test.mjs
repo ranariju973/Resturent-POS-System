@@ -63,11 +63,40 @@ t('refresh token never returned in a response body',
   !/sendSuccess\([^)]*refreshToken/.test(ctlSrc) && !/refreshToken:/.test(ctlSrc));
 
 console.log('\n--- authorisation reads the database, not the token ---');
-t('requireAuth loads the user', /User\.findById\(payload\.sub\)/.test(mwSrc));
+// The lookup goes through loadUser() now, which reads the database and caches
+// the result for 30 seconds. The invariant is unchanged — authorisation comes
+// from the stored record, never from the token's claims — but it is now
+// underwritten by the invalidation asserted further down rather than by
+// querying on literally every request.
+t('requireAuth loads the user', /loadUser\(payload\.sub\)/.test(mwSrc));
+t('...and loadUser reads it from the database', /User\.findById\(id\)/.test(mwSrc));
 t('req.user.role comes from the document', /role:\s*user\.role/.test(mwSrc));
 t('req.user.role is NOT taken from the payload', !/role:\s*payload\.role/.test(mwSrc));
 t('deactivated accounts rejected mid-session', /!user\.isActive/.test(mwSrc));
 t('stale tokenVersion rejected', /payload\.tv[\s\S]{0,40}user\.tokenVersion/.test(mwSrc));
+
+console.log('\n--- the auth cache cannot outlive a permission change ---');
+{
+  const userModel = code('src/models/User.js');
+  const userCache = code('src/utils/userCache.js');
+
+  // This is what makes a 30s cache acceptable: every deliberate change —
+  // deactivation, role change, PIN reset, logout-everywhere — drops it at
+  // once. Hooked on the model so no controller can forget.
+  t('a document save invalidates', /userSchema\.post\('save', dropUserCache\)/.test(userModel));
+  t('a query update invalidates too (login counters use findOneAndUpdate)',
+    /userSchema\.post\('findOneAndUpdate', dropUserCache\)/.test(userModel));
+  t('deletes invalidate', /userSchema\.post\('deleteOne', dropUserCache\)/.test(userModel));
+  t('the hook clears the whole user prefix, not one guessed id',
+    /delPrefix\(USERS_PREFIX\)/.test(userCache));
+
+  // A cached Mongoose document would be a mutable object shared by every
+  // concurrent request; a handler touching it could corrupt what others see.
+  t('the cached user is a lean object, never a document', /\.lean\(\)/.test(mwSrc));
+  // A 30-second cache is no place for password or PIN hashes.
+  t('no credential hash is selected into the cache',
+    !/passwordHash|pinLookup|overridePinLookup/.test(mwSrc));
+}
 
 console.log('\n--- login does not leak which accounts exist ---');
 t('single shared failure message', /GENERIC_LOGIN_FAILURE\s*=\s*'Invalid credentials'/.test(ctlSrc));

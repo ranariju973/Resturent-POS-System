@@ -11,6 +11,7 @@ import { AuditLog } from '../models/AuditLog.js';
 import { AUDIT_ACTION } from '../constants/enums.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { assertCategoryEmpty } from '../utils/referenceGuard.js';
+import { rememberCategories, invalidateMenu } from '../utils/menuCache.js';
 
 const publicCategory = (category, itemCount) => ({
   id: String(category._id),
@@ -24,19 +25,26 @@ const publicCategory = (category, itemCount) => ({
 // GET /api/menu/categories
 // ---------------------------------------------------------------------------
 export const listCategories = asyncHandler(async (req, res) => {
-  const categories = await Category.find({ isActive: true }).sort({ sortOrder: 1, name: 1 });
+  // Takes no filters, so unlike the item list this is a single cacheable
+  // shape. Dropped by invalidateMenu() on any menu OR category write, because
+  // the counts below change when items move.
+  const payload = await rememberCategories(async () => {
+    const categories = await Category.find({ isActive: true }).sort({ sortOrder: 1, name: 1 });
 
-  // One aggregation for all counts rather than a query per category — the
-  // N+1 that turns a 5-category menu into 6 round trips.
-  const counts = await MenuItem.aggregate([
-    { $match: { isActive: true } },
-    { $group: { _id: '$category', count: { $sum: 1 } } },
-  ]);
-  const countBy = new Map(counts.map((c) => [String(c._id), c.count]));
+    // One aggregation for all counts rather than a query per category — the
+    // N+1 that turns a 5-category menu into 6 round trips.
+    const counts = await MenuItem.aggregate([
+      { $match: { isActive: true } },
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+    ]);
+    const countBy = new Map(counts.map((c) => [String(c._id), c.count]));
 
-  return sendSuccess(res, {
-    categories: categories.map((c) => publicCategory(c, countBy.get(String(c._id)) ?? 0)),
+    return {
+      categories: categories.map((c) => publicCategory(c, countBy.get(String(c._id)) ?? 0)),
+    };
   });
+
+  return sendSuccess(res, payload);
 });
 
 // ---------------------------------------------------------------------------
@@ -55,6 +63,7 @@ export const createCategory = asyncHandler(async (req, res) => {
     req,
   );
 
+  await invalidateMenu();
   return sendSuccess(res, { category: publicCategory(category, 0) }, { status: 201 });
 });
 
@@ -78,6 +87,7 @@ export const updateCategory = asyncHandler(async (req, res) => {
     req,
   );
 
+  await invalidateMenu();
   return sendSuccess(res, { category: publicCategory(category) });
 });
 
@@ -112,6 +122,7 @@ export const deleteCategory = asyncHandler(async (req, res) => {
     req,
   );
 
+  await invalidateMenu();
   return sendSuccess(res, { deleted: true, id: String(category._id) });
 });
 

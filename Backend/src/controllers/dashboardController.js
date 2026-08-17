@@ -38,6 +38,7 @@ import { ORDER_STATUS, TICKET_STATUS } from '../constants/enums.js';
 import { dashboardScopeFor } from '../constants/permissions.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { toMajor } from '../utils/money.js';
+import { rememberDashboard } from '../utils/statsCache.js';
 
 /** Local midnight — the service day as staff experience it, not UTC. */
 function startOfToday() {
@@ -92,6 +93,23 @@ export const getDashboard = asyncHandler(async (req, res) => {
   const scope = dashboardScopeFor(req.user.role);
   if (!scope) throw ApiError.forbidden('Insufficient permissions');
 
+  /*
+   * Cached for 30 seconds, keyed by SCOPE rather than by user.
+   *
+   * The scope is derived entirely from the role and decides which of the two
+   * payloads gets built, so every cashier shares one entry and no cashier can
+   * ever be served the admin's wider one. Keying by user id instead would be
+   * a key per staff member for identical data — and, on the admin path, eight
+   * aggregations repeated per person.
+   *
+   * 30 seconds is short on purpose: these are takings, and a dashboard that
+   * lags a sale by half a minute is acceptable where one that lags by five is
+   * not. See utils/statsCache.js for why there is no invalidate-on-payment.
+   */
+  return sendSuccess(res, await rememberDashboard(scope, () => buildDashboard(scope)));
+});
+
+async function buildDashboard(scope) {
   const since = startOfToday();
 
   const [today, pending, completed, recent] = await Promise.all([
@@ -106,7 +124,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
 
   // --- The limited payload, built from scratch ------------------------------
   if (scope === 'limited') {
-    return sendSuccess(res, {
+    return {
       scope,
       todaySalesMinor: today.salesMinor,
       todaySales: toMajor(today.salesMinor),
@@ -114,7 +132,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
       pendingOrders: pending,
       completedOrders: completed,
       recentOrders: recent,
-    });
+    };
   }
 
   // --- The full payload -----------------------------------------------------
@@ -146,7 +164,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
   const grossMinor = thisMonth.salesMinor;
   const netMinor = grossMinor - expenseRow;
 
-  return sendSuccess(res, {
+  return {
     scope,
     todaySalesMinor: today.salesMinor,
     todaySales: toMajor(today.salesMinor),
@@ -179,7 +197,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
       revenueMinor: i.revenueMinor,
       revenue: toMajor(i.revenueMinor),
     })),
-  });
-});
+  };
+}
 
 export default { getDashboard };
