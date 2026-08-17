@@ -267,9 +267,9 @@ try {
   await MenuItem.updateOne({ _id: coldBrew._id }, { $set: { priceMinor: 999 } });
   const refetched = await api('GET', `/api/orders/${orderId}`, { token: cashierToken });
   t('the existing order still shows the price it was sold at',
-    refetched.body?.data?.items?.[0]?.unitPriceMinor === 425,
-    `got ${refetched.body?.data?.items?.[0]?.unitPriceMinor}`);
-  t('and its total is unchanged', refetched.body?.data?.totalMinor === 1275);
+    refetched.body?.data?.order?.items?.[0]?.unitPriceMinor === 425,
+    `got ${refetched.body?.data?.order?.items?.[0]?.unitPriceMinor}`);
+  t('and its total is unchanged', refetched.body?.data?.order?.totalMinor === 1275);
   await MenuItem.updateOne({ _id: coldBrew._id }, { $set: { priceMinor: 425 } });
 
   // -------------------------------------------------------------------------
@@ -281,8 +281,8 @@ try {
   });
   t('a cashier may apply 10%', smallDiscount.status === 200, `status ${smallDiscount.status}`);
   t('the discount is computed server-side',
-    smallDiscount.body?.data?.discountMinor === 128,
-    `got ${smallDiscount.body?.data?.discountMinor} (10% of 1275, rounded)`);
+    smallDiscount.body?.data?.order?.discountMinor === 128,
+    `got ${smallDiscount.body?.data?.order?.discountMinor} (10% of 1275, rounded)`);
 
   const bigDiscount = await api('PATCH', `/api/orders/${orderId}/discount`, {
     token: cashierToken,
@@ -303,7 +303,7 @@ try {
   });
   t('the correct override PIN allows it', approved.status === 200, `status ${approved.status}`);
   t('the approving manager is recorded',
-    approved.body?.data?.approvedBy === String(admin._id));
+    approved.body?.data?.order?.approvedBy === String(admin._id));
 
   await api('PATCH', `/api/orders/${orderId}/discount`, {
     token: cashierToken,
@@ -328,15 +328,15 @@ try {
     token: cashierToken,
     body: {},
   });
-  t('advancing moves pending -> preparing', advance1.body?.data?.status === 'preparing',
-    advance1.body?.data?.status);
+  t('advancing moves pending -> preparing', advance1.body?.data?.ticket?.status === 'preparing',
+    advance1.body?.data?.ticket?.status);
 
   const advance2 = await api('PATCH', `/api/kitchen/tickets/${ticket._id}/advance`, {
     token: cashierToken,
     body: {},
   });
-  t('and preparing -> ready', advance2.body?.data?.status === 'ready');
-  t('readyAt is stamped', Boolean(advance2.body?.data?.readyAt));
+  t('and preparing -> ready', advance2.body?.data?.ticket?.status === 'ready');
+  t('readyAt is stamped', Boolean(advance2.body?.data?.ticket?.readyAt));
 
   const cashierRecall = await api('PATCH', `/api/kitchen/tickets/${ticket._id}/recall`, {
     token: cashierToken,
@@ -349,7 +349,7 @@ try {
     body: {},
   });
   t('an admin CAN', adminRecall.status === 200, `status ${adminRecall.status}`);
-  t('recall moved it back to preparing', adminRecall.body?.data?.status === 'preparing');
+  t('recall moved it back to preparing', adminRecall.body?.data?.ticket?.status === 'preparing');
 
   const recalled = await Ticket.findById(ticket._id);
   t('history is append-only — every transition is still there',
@@ -365,11 +365,22 @@ try {
     body: { paymentMethod: 'card' },
   });
   t('the bill settles', paid.status === 200, `status ${paid.status}`);
-  t('it is marked paid', paid.body?.data?.status === 'paid');
+  t('it is marked paid', paid.body?.data?.order?.status === 'paid');
 
   const freedTable = await Table.findById(table._id);
   t('the table is released', freedTable?.currentOrder === null);
-  t('and available again', freedTable?.status === 'available');
+  /*
+   * NOT 'available'. Paying does not make a party stand up — they are still
+   * sitting there with their coffee. orderController explains the choice where
+   * it releases the bill: a floor plan that turns the table green the instant
+   * the card is tapped tells the host a table is free that is not. The table
+   * stays seated until someone clears it explicitly.
+   *
+   * This assertion used to expect 'available' and was simply wrong about the
+   * product. Asserting the real rule instead means it now guards that rule.
+   */
+  t('but the table stays seated until someone clears it',
+    freedTable?.status === 'occupied', `status ${freedTable?.status}`);
 
   const rePay = await api('POST', `/api/orders/${orderId}/pay`, {
     token: cashierToken,
@@ -399,7 +410,7 @@ try {
   });
   t('with a manager override, they can', approvedVoid.status === 200,
     `status ${approvedVoid.status}`);
-  t('the reason is recorded', approvedVoid.body?.data?.voidReason === 'Wrong table charged');
+  t('the reason is recorded', approvedVoid.body?.data?.order?.voidReason === 'Wrong table charged');
 
   // -------------------------------------------------------------------------
   section('reports reflect reality');
