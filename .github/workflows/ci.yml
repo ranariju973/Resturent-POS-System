@@ -74,19 +74,18 @@ jobs:
         run: npm run build
 
   integration:
-    name: Integration (quarantined — 11 known failures)
+    name: Integration — full order lifecycle
     runs-on: ubuntu-latest
-    # QUARANTINED, NOT TRUSTED.
+    # Was quarantined with continue-on-error while it reported 78 passed,
+    # 11 failed — the file had never been executed, so nobody knew whether
+    # those were stale assertions or real bugs.
     #
-    # tests/integration/flow.test.mjs currently reports 78 passed, 11 failed.
-    # Its own header explains why: it "was written in an environment with no
-    # MongoDB available, so it has never been executed". The failures are
-    # therefore unreviewed — they may be stale assertions or they may be real
-    # bugs, and nobody has looked yet.
-    #
-    # Running it red-but-non-blocking keeps it visible instead of forgotten.
-    # Once the 11 are triaged, delete this line so it gates like the rest.
-    continue-on-error: true
+    # All 11 were triaged and were defects in the test, not the application:
+    # ten read the response envelope one level too shallow (data.status rather
+    # than data.order.status), and one asserted a table becomes 'available' the
+    # moment a bill is paid, which is the opposite of what the product
+    # deliberately does. It now reports 89 passed, 0 failed and gates like
+    # every other job.
 
     services:
       mongodb:
