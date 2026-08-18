@@ -80,5 +80,40 @@ const guarded = SCREENS.filter((s) => new RegExp(`^\\s*${s}:`, 'm').test(screenB
 t(`${SCREENS.length} screens declared, ${guarded.length} guarded`, guarded.length === SCREENS.length,
   SCREENS.filter((s) => !guarded.includes(s)).join(', '));
 
+/*
+ * ── Every client fetch must carry the API origin ───────────────────────────
+ * The frontend is served from Vercel and the API lives on Render, so a bare
+ * relative `/api/...` resolves to Vercel — where vercel.json's SPA rewrite
+ * deliberately excludes /api/, so it 404s.
+ *
+ * This is not hypothetical. PublicInvoice shipped with a relative fetch and
+ * every invoice link a customer opened told them the link was invalid. It was
+ * invisible in development, where Vite proxies /api and both halves share an
+ * origin — which is exactly why a test has to say it instead of a reviewer.
+ */
+console.log('\n--- client fetches reach the API origin, not the static host ---');
+{
+  const clientSrcDir = path.dirname(path.dirname(CLIENT)); // .../src
+  const files = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(e.name)) files.push(full);
+    }
+  };
+  walk(clientSrcDir);
+
+  const offenders = files.filter((f) =>
+    /fetch\(\s*[`'"]\/api\//.test(fs.readFileSync(f, 'utf8')),
+  );
+
+  t(
+    `no relative fetch('/api/...') in ${files.length} client files`,
+    offenders.length === 0,
+    offenders.map((f) => path.relative(clientSrcDir, f)).join(', '),
+  );
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
