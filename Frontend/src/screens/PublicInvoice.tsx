@@ -13,6 +13,7 @@
  */
 import { useEffect, useState, type CSSProperties } from 'react';
 import { Icon } from '../icons/Icon';
+import { BASE_URL } from '../lib/api';
 import { money } from '../lib/format';
 
 interface InvoiceLine {
@@ -58,7 +59,23 @@ export function PublicInvoice({ slug }: { slug: string }) {
 
     void (async () => {
       try {
-        const res = await fetch(`/api/invoice/${encodeURIComponent(slug)}`, {
+        /*
+         * BASE_URL, not a bare relative path.
+         *
+         * This screen does not use the shared api() helper — it is the one
+         * view with no session, and api() attaches a bearer token and retries
+         * through /auth/refresh, neither of which a customer has. But dropping
+         * the helper also dropped the thing it was quietly doing: prefixing
+         * the API origin.
+         *
+         * In development that was invisible, because Vite proxies /api to the
+         * backend and both are one origin. In production the frontend is on
+         * Vercel and the API is on Render, and vercel.json's SPA rewrite
+         * deliberately excludes /api/ — so a relative fetch here hit Vercel,
+         * got a 404 HTML page, and every invoice link a customer opened said
+         * "This invoice link is not valid."
+         */
+        const res = await fetch(`${BASE_URL}/api/invoice/${encodeURIComponent(slug)}`, {
           headers: { Accept: 'application/json' },
         });
         const body = await res.json().catch(() => null);
