@@ -213,7 +213,14 @@ console.log('\n--- cross-tenant reads are few, and each says why ---');
  * becomes a leak between customers, so the count is asserted: adding one means
  * changing this number, which shows up in review.
  */
-const MAX_UNSCOPED_CALLS = 9;
+/*
+ * Raised from 9 to 10 for User.updateSelf — account-maintenance writes that
+ * run during authentication, before a restaurant is known. Each entry printed
+ * below is a place where a bug becomes a leak between customers, so the number
+ * is asserted rather than trusted: raising it is a deliberate edit that shows
+ * up in review.
+ */
+const MAX_UNSCOPED_CALLS = 10;
 const srcFiles = [];
 const walk = (dir) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

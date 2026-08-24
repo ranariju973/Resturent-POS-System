@@ -31,6 +31,7 @@ import { env } from '../config/env.js';
 import { ROLES, ROLE_VALUES, PIN_ROLES } from '../constants/enums.js';
 import { minorField } from '../utils/money.js';
 import { tenantScoped } from './plugins/tenantScoped.js';
+import { runUnscoped } from '../utils/tenantContext.js';
 
 const BCRYPT_COST = 12;
 const PIN_LENGTH = 4;
@@ -374,6 +375,33 @@ userSchema.methods.verifyPin = async function verifyPin(plain) {
 // --- Lockout ---------------------------------------------------------------
 
 /**
+ * Update THIS account, without a restaurant filter.
+ *
+ * ── Why these three writes are unscoped ────────────────────────────────────
+ * They are account maintenance — a failed-attempt counter, a lockout, a
+ * last-login stamp, a token revocation — and every one of them targets a
+ * single document the caller is already holding, addressed by its `_id`. An
+ * ObjectId is unique across the whole deployment, so such an update can only
+ * ever touch the one row it names; a tenant filter would narrow nothing.
+ *
+ * They must be unscoped rather than merely permitted to be, because they run
+ * during AUTHENTICATION — before a restaurant is known, and sometimes for an
+ * account that genuinely has none yet. A Google user signing in for the first
+ * time has no restaurant until they name one, and stamping their login is the
+ * step that stood between them and the onboarding screen: it threw, and the
+ * first thing a new customer ever did returned a 500.
+ *
+ * The same reasoning as `loadUser` in middleware/auth.js, which cannot scope
+ * the read that discovers the scope.
+ *
+ * @param {object} update A Mongoose update document.
+ */
+userSchema.methods.updateSelf = function updateSelf(update) {
+  return runUnscoped('User: maintenance write on one account, keyed by _id', async () =>
+    this.constructor.updateOne({ _id: this._id }, update));
+};
+
+/**
  * Record a failed attempt and lock the account once the threshold is hit.
  * Uses an atomic update so two concurrent attempts cannot both read 4 and
  * write 5, letting an attacker exceed the limit by racing.
@@ -382,14 +410,13 @@ userSchema.methods.registerFailedLogin = async function registerFailedLogin() {
   const attempts = (this.failedLoginAttempts ?? 0) + 1;
 
   if (attempts < MAX_FAILED_ATTEMPTS) {
-    await this.constructor.updateOne({ _id: this._id }, { $inc: { failedLoginAttempts: 1 } });
+    await this.updateSelf({ $inc: { failedLoginAttempts: 1 } });
     return false;
   }
 
   // Threshold hit: lock, and make the next lock twice as long as this one.
   const duration = lockDurationFor(this.lockoutCount ?? 0);
-  await this.constructor.updateOne(
-    { _id: this._id },
+  await this.updateSelf(
     {
       $set: { lockUntil: new Date(Date.now() + duration), failedLoginAttempts: 0 },
       $inc: { lockoutCount: 1 },
@@ -404,18 +431,15 @@ userSchema.methods.registerFailedLogin = async function registerFailedLogin() {
  * legitimate users: one correct sign-in wipes the escalation entirely.
  */
 userSchema.methods.registerSuccessfulLogin = async function registerSuccessfulLogin() {
-  await this.constructor.updateOne(
-    { _id: this._id },
-    {
-      $set: { failedLoginAttempts: 0, lockoutCount: 0, lastLoginAt: new Date() },
-      $unset: { lockUntil: 1 },
-    },
-  );
+  await this.updateSelf({
+    $set: { failedLoginAttempts: 0, lockoutCount: 0, lastLoginAt: new Date() },
+    $unset: { lockUntil: 1 },
+  });
 };
 
 /** Invalidate every issued token for this user (logout-everywhere / revoke). */
 userSchema.methods.revokeTokens = async function revokeTokens() {
-  await this.constructor.updateOne({ _id: this._id }, { $inc: { tokenVersion: 1 } });
+  await this.updateSelf({ $inc: { tokenVersion: 1 } });
 };
 
 // --- Statics ---------------------------------------------------------------
