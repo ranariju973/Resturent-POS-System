@@ -44,6 +44,20 @@ export default defineConfig(({ mode }) => {
    * Google credentials.
    */
   if (mode === 'production' && !env.VITE_GOOGLE_CLIENT_ID) {
+    /*
+     * Show what the build CAN see.
+     *
+     * The first version of this message listed things to go and check, which
+     * is a guess dressed up as instructions. The list below is evidence: if
+     * other VITE_* names appear, variables reach the build fine and this one
+     * specifically is misnamed or scoped wrong; if the list is empty, nothing
+     * reaches the build at all and the problem is the project or environment,
+     * not the variable.
+     */
+    const visible = Object.keys({ ...env, ...process.env })
+      .filter((k) => k.startsWith('VITE_'))
+      .sort();
+
     throw new Error(
       [
         '',
@@ -52,10 +66,22 @@ export default defineConfig(({ mode }) => {
         'Administrators authenticate with Google and have no other way in, so a',
         'bundle without it is a POS nobody can open. Refusing to build it.',
         '',
-        'On Vercel: Settings -> Environment Variables. Add VITE_GOOGLE_CLIENT_ID',
-        'and make sure the PRODUCTION environment is ticked — a variable scoped',
-        'only to Preview is invisible to a production build. Then redeploy:',
-        'changing a variable does not rebuild on its own.',
+        visible.length
+          ? `VITE_* variables this build CAN see: ${visible.join(', ')}`
+          : 'This build can see NO VITE_* variables at all.',
+        '',
+        visible.length
+          ? 'Others got through, so this one is misnamed or scoped differently.'
+            + ' The name is case-sensitive and must match exactly.'
+          : 'None got through, so the problem is not this variable — check that the'
+            + ' deploy belongs to the project the variables were added to.',
+        '',
+        'On Vercel: Settings -> Environment Variables.',
+        '  • PRODUCTION must be ticked. A variable scoped only to Preview is',
+        '    invisible to a production build.',
+        '  • It must NOT be marked Sensitive. Sensitive variables are withheld',
+        '    from the build step, which is the only place Vite can read one.',
+        '  • Redeploy afterwards. Changing a variable never rebuilds on its own.',
         '',
         'Locally: put it in Frontend/.env.local and restart the dev server.',
         '',
