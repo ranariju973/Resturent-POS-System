@@ -7,6 +7,7 @@
 import mongoose from 'mongoose';
 import { EXPENSE_CATEGORY_VALUES } from '../constants/enums.js';
 import { minorField } from '../utils/money.js';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const expenseSchema = new mongoose.Schema(
   {
@@ -58,8 +59,10 @@ expenseSchema.virtual('amount').get(function amountGetter() {
 });
 
 // The P&L query: live expenses in a date window, grouped by category.
-expenseSchema.index({ isActive: 1, date: -1 });
-expenseSchema.index({ category: 1, date: -1 });
+expenseSchema.plugin(tenantScoped);
+
+expenseSchema.index({ tenantId: 1, isActive: 1, date: -1 });
+expenseSchema.index({ tenantId: 1, category: 1, date: -1 });
 
 export const Expense = mongoose.model('Expense', expenseSchema);
 export default Expense;

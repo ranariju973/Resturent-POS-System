@@ -14,18 +14,25 @@
  */
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { OAuth2Client } from 'google-auth-library';
 import { User, MAX_FAILED_ATTEMPTS, BCRYPT_COST } from '../models/User.js';
 import { RefreshToken, hashToken } from '../models/RefreshToken.js';
+import { Device } from '../models/Device.js';
+import { Tenant } from '../models/Tenant.js';
 import { AuditLog } from '../models/AuditLog.js';
-import { AUDIT_ACTION } from '../constants/enums.js';
+import { AUDIT_ACTION, ROLES } from '../constants/enums.js';
+import { env } from '../config/env.js';
 import { publicUser } from '../utils/publicUser.js';
+import { runUnscoped, runInTenant, getTenantId } from '../utils/tenantContext.js';
 import {
   signAccessToken,
   signRefreshToken,
   verifyRefreshToken,
   refreshCookieOptions,
   clearRefreshCookieOptions,
+  clearDeviceCookieOptions,
   REFRESH_COOKIE,
+  DEVICE_COOKIE,
 } from '../utils/jwt.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { logger } from '../utils/logger.js';
@@ -55,22 +62,34 @@ async function burnTiming(candidate) {
 
 /**
  * Issue an access/refresh pair, persist the refresh record and set the cookie.
+ *
+ * Exported because onboarding needs it: creating a restaurant revokes the
+ * token that got the user there, so a fresh session has to be minted through
+ * the same path every other login uses.
  * @param {import('express').Response} res
  * @param {object} user
  * @param {import('express').Request} req
  * @param {any} [family] existing family id when rotating; a new one on login
  */
-async function issueSession(res, user, req, family) {
+export async function issueSession(res, user, req, family) {
   const sessionFamily = family ?? new mongoose.Types.ObjectId();
 
   const accessToken = signAccessToken({
     id: user._id,
     role: user.role,
     tokenVersion: user.tokenVersion ?? 0,
+    // requireAuth compares this against the database on every request, so an
+    // account moved between restaurants invalidates its existing tokens.
+    tenantId: user.tenantId ?? null,
   });
 
   const refresh = signRefreshToken(
-    { id: user._id, role: user.role, tokenVersion: user.tokenVersion ?? 0 },
+    {
+      id: user._id,
+      role: user.role,
+      tokenVersion: user.tokenVersion ?? 0,
+      tenantId: user.tenantId ?? null,
+    },
     { family: sessionFamily },
   );
 
@@ -89,8 +108,15 @@ async function issueSession(res, user, req, family) {
   return { accessToken, jti: refresh.jti, family: sessionFamily };
 }
 
-/** Shared tail of a successful login. */
-async function completeLogin(req, res, user) {
+/**
+ * Shared tail of a successful login.
+ *
+ * @param {object} [context]
+ * @param {object} [context.tenant] the restaurant, so the client can label the
+ *   screen without a second request
+ * @param {object} [context.device] the terminal, on a PIN login
+ */
+async function completeLogin(req, res, user, { tenant, device } = {}) {
   await user.registerSuccessfulLogin();
   const { accessToken } = await issueSession(res, user, req);
 
@@ -102,7 +128,7 @@ async function completeLogin(req, res, user) {
       action: AUDIT_ACTION.LOGIN_SUCCESS,
       resource: 'User',
       resourceId: user._id,
-      meta: { method: user.email ? 'password' : 'pin' },
+      meta: { method: user.authProvider === 'google' ? 'google' : 'pin' },
     },
     req,
   );
@@ -116,7 +142,19 @@ async function completeLogin(req, res, user) {
   // lastLoginAt was just written by registerSuccessfulLogin; reflect it.
   user.lastLoginAt = new Date();
 
-  return sendSuccess(res, { accessToken, user: publicUser(user) });
+  return sendSuccess(res, {
+    accessToken,
+    user: publicUser(user),
+    /*
+     * The restaurant's name and the terminal's, returned with the session.
+     *
+     * The till renders both in its header. Sending them here rather than
+     * making the client fetch them saves a round trip on every sign-in, and
+     * means the labels can never disagree with the session they belong to.
+     */
+    restaurant: tenant ? { id: String(tenant._id), name: tenant.name, slug: tenant.slug } : null,
+    terminal: device ? { id: String(device._id), name: device.name } : null,
+  });
 }
 
 /** Log and audit a failure without ever recording the attempted secret. */
@@ -129,6 +167,17 @@ async function recordFailure(req, { userId = null, reason, identifier }) {
       resourceId: userId,
       // `identifier` is an email or the string 'pin' — never the PIN itself.
       meta: { reason, identifier },
+      /*
+       * A failure may or may not have a restaurant behind it. A bad PIN at a
+       * linked terminal does — the device resolved one before the PIN was
+       * checked. An unverified Google token does not, and never will.
+       *
+       * Passing null explicitly on that path tells AuditLog.record to write
+       * the entry unscoped rather than throw, which is what keeps the most
+       * security-relevant events in the trail instead of dropping exactly the
+       * ones nobody can attribute.
+       */
+      tenantId: getTenantId() ?? null,
     },
     req,
   );
@@ -137,104 +186,255 @@ async function recordFailure(req, { userId = null, reason, identifier }) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/auth/login/admin
+// POST /api/auth/google
 // ---------------------------------------------------------------------------
-export const loginAdmin = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+/**
+ * One client, reused. Constructing an OAuth2Client per request would discard
+ * the cached copy of Google's signing keys and refetch them over the network
+ * on every sign-in.
+ */
+const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
 
-  const user = await User.findActiveAdminByEmail(email);
+/**
+ * Sign in with Google. The only way to become an administrator.
+ *
+ * ── Why no password anywhere ───────────────────────────────────────────────
+ * Passwords for owners meant this codebase carried a reset flow, a lockout
+ * policy and a bcrypt hash for accounts that sign in a few times a week. All
+ * of it is now Google's problem, along with the 2FA a restaurant owner is far
+ * more likely to have enabled there than here.
+ *
+ * ── What is verified ───────────────────────────────────────────────────────
+ * `verifyIdToken` checks the signature against Google's published keys, plus
+ * `iss`, `aud` and `exp`. It does NOT decide whether the address is real:
+ * `email_verified` is ours to check, and it matters because email is how a
+ * person is recognised — an unverified address means the holder may not
+ * control the mailbox that identifies them.
+ *
+ * The client SECRET plays no part. Nothing here needs it, which is one fewer
+ * credential to store or leak.
+ */
+export const loginGoogle = asyncHandler(async (req, res) => {
+  const { credential } = req.body;
 
-  if (!user) {
-    await burnTiming(password);
-    await recordFailure(req, { reason: 'unknown-account', identifier: email });
+  let payload;
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: env.GOOGLE_CLIENT_ID,
+    });
+    payload = ticket.getPayload();
+  } catch {
+    await recordFailure(req, { reason: 'google-token-invalid', identifier: 'google' });
     throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
   }
 
-  if (user.isLocked) {
-    await recordFailure(req, { userId: user._id, reason: 'locked', identifier: email });
-    throw ApiError.tooManyRequests(LOCKED_MESSAGE);
+  if (!payload?.email_verified || !payload.email || !payload.sub) {
+    await recordFailure(req, { reason: 'google-email-unverified', identifier: 'google' });
+    throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
   }
 
-  const ok = await user.verifyPassword(password);
+  /*
+   * Deliberately unscoped: there is no session yet, so there is no restaurant
+   * to scope by — finding out which one this person belongs to is the point.
+   * googleId is globally unique (see models/User.js), so this is a single
+   * indexed equality, not a scan.
+   */
+  const existing = await runUnscoped('google sign-in: identity -> account', async () =>
+    User.findOne({ googleId: payload.sub }).select('+tokenVersion'));
 
-  if (!ok) {
-    const nowLocked = await user.registerFailedLogin();
+  if (existing && !existing.isActive) {
     await recordFailure(req, {
-      userId: user._id,
-      reason: 'bad-password',
-      identifier: email,
+      userId: existing._id,
+      reason: 'inactive-account',
+      identifier: payload.email,
     });
+    throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
+  }
 
-    if (nowLocked) {
-      await AuditLog.record(
-        {
-          actor: user._id,
-          actorName: user.name,
-          actorRole: user.role,
-          action: AUDIT_ACTION.ACCOUNT_LOCKED,
-          resource: 'User',
-          resourceId: user._id,
-          meta: { after: MAX_FAILED_ATTEMPTS },
-        },
-        req,
-      );
+  /*
+   * A first-time visitor. The account is created here, with no restaurant, so
+   * that abandoning onboarding and coming back lands on the same account
+   * rather than minting a new one each visit.
+   *
+   * No burnTiming on this path: a Google ID token is already proof of
+   * identity, so there is no secret to compare and no enumeration oracle to
+   * defend — the response says nothing the holder of the token did not
+   * already know.
+   */
+  const user = existing ?? await runUnscoped('google sign-in: create the account', async () =>
+    User.create({
+      name: payload.name?.slice(0, 80) || payload.email.split('@')[0],
+      email: payload.email,
+      googleId: payload.sub,
+      authProvider: 'google',
+      role: ROLES.ADMIN,
+      avatarUrl: payload.picture ?? '',
+      tenantId: null,
+      isActive: true,
+    }));
+
+  // Google is authoritative for these; keep them current on every sign-in.
+  if (existing && payload.picture && existing.avatarUrl !== payload.picture) {
+    existing.avatarUrl = payload.picture;
+  }
+
+  /*
+   * An account with no restaurant is NOT an error. It is a real session whose
+   * token carries an empty tenant claim, which the model plugin then refuses
+   * for every scoped query — so it can reach exactly the two endpoints
+   * onboarding needs (GET /auth/me and POST /tenants) and nothing else.
+   *
+   * Issuing a normal session rather than a special-purpose signup ticket means
+   * POST /tenants sits behind the ordinary requireAuth wall, so there is no
+   * second, weaker authentication path to review.
+   */
+  if (!user.tenantId) {
+    await user.registerSuccessfulLogin();
+    const { accessToken } = await issueSession(res, user, req);
+
+    await AuditLog.record(
+      {
+        actor: user._id,
+        actorName: user.name,
+        actorRole: user.role,
+        action: AUDIT_ACTION.LOGIN_SUCCESS,
+        resource: 'User',
+        resourceId: user._id,
+        meta: { method: 'google', onboarding: true },
+        // No tenant exists to attribute this to yet.
+        tenantId: null,
+      },
+      req,
+    );
+
+    return sendSuccess(res, {
+      accessToken,
+      user: publicUser(user),
+      onboarding: {
+        required: true,
+        reason: 'no-restaurant',
+        // A sensible default for the name field, not a decision.
+        suggestedName: payload.given_name ? `${payload.given_name}'s Restaurant` : '',
+      },
+    });
+  }
+
+  // An established owner. Everything below belongs to their restaurant.
+  return runInTenant(user.tenantId, async () => {
+    const tenant = await Tenant.findById(user.tenantId).lean();
+
+    if (!tenant?.isActive) {
+      await recordFailure(req, {
+        userId: user._id,
+        reason: 'restaurant-inactive',
+        identifier: payload.email,
+      });
+      throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
     }
 
-    // Still the generic message — the client is not told it is now locked,
-    // which would confirm the account exists.
-    throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
-  }
-
-  return completeLogin(req, res, user);
+    return completeLogin(req, res, user, { tenant });
+  });
 });
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/login/staff
 // ---------------------------------------------------------------------------
+/**
+ * Sign in with a 4-digit PIN, at a terminal that knows which restaurant it is.
+ *
+ * ── The ordering that makes this safe ──────────────────────────────────────
+ * The restaurant is resolved FIRST, from the device cookie, and the PIN is
+ * matched only within it. That ordering is the whole fix: PINs are unique per
+ * restaurant, not globally, so two venues can both issue 1234 and a lookup
+ * without a restaurant would be ambiguous at best and a cross-restaurant
+ * sign-in at worst.
+ */
 export const loginStaff = asyncHandler(async (req, res) => {
   const { pin } = req.body;
+  const deviceToken = req.cookies?.[DEVICE_COOKIE];
 
-  // One indexed lookup via the peppered lookup hash — see User.js for why
-  // this is not a scan over every staff row.
-  const user = await User.findActiveByPin(pin);
-
-  if (!user) {
-    await burnTiming(pin);
-    await recordFailure(req, { reason: 'unknown-pin', identifier: 'pin' });
-    throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
+  /*
+   * An unlinked terminal is told so, plainly.
+   *
+   * This deliberately breaks the "one message for every failure" rule that
+   * governs the rest of this file, and it is not an exception worth worrying
+   * about: it reveals only that THIS BROWSER holds no device cookie, which the
+   * browser already knows. It reveals nothing about any account, and the
+   * client needs to distinguish it to show the setup screen rather than a red
+   * "wrong PIN" under the keypad.
+   */
+  if (!deviceToken) {
+    throw ApiError.unauthorized('This terminal is not linked to a restaurant', {
+      code: 'TERMINAL_NOT_LINKED',
+    });
   }
 
-  if (user.isLocked) {
-    await recordFailure(req, { userId: user._id, reason: 'locked', identifier: 'pin' });
-    throw ApiError.tooManyRequests(LOCKED_MESSAGE);
+  // Unscoped for the same reason as the Google lookup: this IS the resolution.
+  const device = await runUnscoped('staff login: device token -> restaurant', async () =>
+    Device.findByToken(deviceToken));
+
+  if (!device) {
+    // The cookie is stale — the terminal was unlinked, or the pepper rotated.
+    // Clearing it means the client stops presenting a token that cannot work.
+    res.clearCookie(DEVICE_COOKIE, clearDeviceCookieOptions());
+    throw ApiError.unauthorized('This terminal is not linked to a restaurant', {
+      code: 'TERMINAL_NOT_LINKED',
+    });
   }
 
-  // The lookup hash only narrowed the candidate. bcrypt is what authenticates.
-  const ok = await user.verifyPin(pin);
+  return runInTenant(device.tenantId, async () => {
+    /*
+     * One indexed lookup via the peppered lookup hash. The tenant filter is
+     * added by the model plugin, so findActiveByPin needed no change at all —
+     * it is the {tenantId, pinLookup} index that makes this both correct and
+     * still O(1).
+     */
+    const user = await User.findActiveByPin(pin);
 
-  if (!ok) {
-    const nowLocked = await user.registerFailedLogin();
-    await recordFailure(req, { userId: user._id, reason: 'bad-pin', identifier: 'pin' });
-
-    if (nowLocked) {
-      await AuditLog.record(
-        {
-          actor: user._id,
-          actorName: user.name,
-          actorRole: user.role,
-          action: AUDIT_ACTION.ACCOUNT_LOCKED,
-          resource: 'User',
-          resourceId: user._id,
-          meta: { after: MAX_FAILED_ATTEMPTS },
-        },
-        req,
-      );
+    if (!user) {
+      await burnTiming(pin);
+      await recordFailure(req, { reason: 'unknown-pin', identifier: 'pin' });
+      throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
     }
 
-    throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
-  }
+    if (user.isLocked) {
+      await recordFailure(req, { userId: user._id, reason: 'locked', identifier: 'pin' });
+      throw ApiError.tooManyRequests(LOCKED_MESSAGE);
+    }
 
-  return completeLogin(req, res, user);
+    // The lookup hash only narrowed the candidate. bcrypt is what authenticates.
+    const ok = await user.verifyPin(pin);
+
+    if (!ok) {
+      const nowLocked = await user.registerFailedLogin();
+      await recordFailure(req, { userId: user._id, reason: 'bad-pin', identifier: 'pin' });
+
+      if (nowLocked) {
+        await AuditLog.record(
+          {
+            actor: user._id,
+            actorName: user.name,
+            actorRole: user.role,
+            action: AUDIT_ACTION.ACCOUNT_LOCKED,
+            resource: 'User',
+            resourceId: user._id,
+            meta: { after: MAX_FAILED_ATTEMPTS },
+          },
+          req,
+        );
+      }
+
+      throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
+    }
+
+    // Fire-and-forget: a failed timestamp write must not fail a valid login.
+    device.lastSeenAt = new Date();
+    device.save().catch(() => {});
+
+    const tenant = await Tenant.findById(device.tenantId).lean();
+    return completeLogin(req, res, user, { tenant, device });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -387,8 +587,68 @@ export const logout = asyncHandler(async (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /api/auth/me
 // ---------------------------------------------------------------------------
-export const me = asyncHandler(async (req, res) =>
-  sendSuccess(res, { user: publicUser(req.authUser) }),
-);
+/**
+ * The current session.
+ *
+ * Reached by two quite different callers, which is why the restaurant may be
+ * null: a signed-in member of staff whose session is being restored on page
+ * load, and a Google account that has authenticated but not yet named a
+ * restaurant. The second is the only other endpoint such a session can reach,
+ * and `onboarding` is how the client knows to render that step instead of the
+ * app.
+ */
+export const me = asyncHandler(async (req, res) => {
+  const tenant = req.tenantId ? await Tenant.findById(req.tenantId).lean() : null;
 
-export default { loginAdmin, loginStaff, refresh, logout, me };
+  return sendSuccess(res, {
+    user: publicUser(req.authUser),
+    restaurant: tenant ? { id: String(tenant._id), name: tenant.name, slug: tenant.slug } : null,
+    onboarding: req.tenantId ? null : { required: true, reason: 'no-restaurant' },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/auth/terminal     (public — no session)
+// ---------------------------------------------------------------------------
+/**
+ * What restaurant is this terminal linked to?
+ *
+ * The login screen needs the name BEFORE anyone signs in — a keypad that says
+ * only "enter your PIN" gives a cashier no way to notice they are standing at
+ * the wrong restaurant's terminal, and no way to tell an unlinked machine from
+ * a broken one.
+ *
+ * Deliberately unauthenticated, because nobody has a session at this point.
+ * What it discloses is bounded to what the holder of this browser's cookie has
+ * already been granted by an owner who linked the machine: two names, and
+ * nothing about any account, any staff member or any PIN. An unlinked or
+ * revoked terminal gets `linked: false` rather than an error, because that is
+ * a normal state with its own screen.
+ */
+export const terminalInfo = asyncHandler(async (req, res) => {
+  const deviceToken = req.cookies?.[DEVICE_COOKIE];
+  if (!deviceToken) return sendSuccess(res, { linked: false, restaurant: null, terminal: null });
+
+  const device = await runUnscoped('terminal label: device token -> restaurant', async () =>
+    Device.findByToken(deviceToken));
+
+  if (!device) {
+    res.clearCookie(DEVICE_COOKIE, clearDeviceCookieOptions());
+    return sendSuccess(res, { linked: false, restaurant: null, terminal: null });
+  }
+
+  return runInTenant(device.tenantId, async () => {
+    const tenant = await Tenant.findById(device.tenantId).lean();
+    if (!tenant?.isActive) {
+      return sendSuccess(res, { linked: false, restaurant: null, terminal: null });
+    }
+
+    return sendSuccess(res, {
+      linked: true,
+      restaurant: { name: tenant.name, slug: tenant.slug },
+      terminal: { name: device.name },
+    });
+  });
+});
+
+export default { loginGoogle, loginStaff, refresh, logout, me, terminalInfo };

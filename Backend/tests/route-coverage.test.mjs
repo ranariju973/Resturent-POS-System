@@ -31,16 +31,24 @@ const t = (label, cond, note = '') => {
 const EXEMPTIONS = {
   'health.js GET /health':
     'Public liveness probe. Returns no data about the business.',
-  'auth.js POST /login/admin':
-    'Cannot require a session to create one. Rate-limited instead.',
+  'auth.js POST /google':
+    'Cannot require a session to create one. The Google ID token is verified '
+    + 'cryptographically against Google\'s published keys (signature, iss, aud, exp) '
+    + 'plus an email_verified check, and the route is rate-limited by loginLimiter.',
   'auth.js POST /login/staff':
-    'Same. Rate-limited and account-locked.',
+    'Same. Rate-limited and account-locked. The restaurant is resolved from the '
+    + 'terminal\'s device cookie BEFORE the PIN is matched, so a PIN is only ever '
+    + 'compared within one restaurant.',
   'auth.js POST /refresh':
     'Authenticated by the httpOnly refresh cookie, not a bearer token.',
   'auth.js POST /logout':
     'Deliberately open: an expired access token must not prevent ending a session.',
   'kitchen.js GET /stream':
     'EventSource cannot set headers. Verifies a 60s single-purpose token in-handler and re-checks kitchen:view against the database.',
+  'terminal.js GET /':
+    'The login screen must name the restaurant before anyone has a session. Reads '
+    + 'only the device cookie and returns two names — nothing about any account, '
+    + 'staff member or PIN. An unlinked terminal gets { linked: false }, not an error.',
   'invoice.js GET /:slug':
     'A customer opening a receipt link has no session and never will. Authenticated by a 192-bit token in the URL, hashed at rest; the response is a separate serialiser carrying no staff identity, no internal ids and no phone number.',
 };
@@ -148,9 +156,20 @@ console.log('\n--- 1. every route requires authentication ---');
 // ---------------------------------------------------------------------------
 console.log('\n--- 2. every route names a permission (reads included) ---');
 {
-  // Auth routes gate on session identity, not on a permission; health is public.
+  /*
+   * Auth routes gate on session identity, not on a permission; health is
+   * public.
+   *
+   * `tenants.js POST /` is the one data route that genuinely cannot name a
+   * permission. It is reached by a Google account that has authenticated but
+   * does not yet belong to a restaurant, and permissions are derived from a
+   * role WITHIN one — there is nothing for it to hold yet. What stands in
+   * place of a permission is the handler's own refusal when the account
+   * already has a restaurant, which makes it callable exactly once per
+   * account. It IS behind requireAuth().
+   */
   const NO_PERMISSION_NEEDED = new Set(
-    Object.keys(EXEMPTIONS).concat(['auth.js GET /me']),
+    Object.keys(EXEMPTIONS).concat(['auth.js GET /me', 'tenants.js POST /']),
   );
   const unguarded = all.filter((r) => !r.hasPermission && !NO_PERMISSION_NEEDED.has(r.key));
   for (const r of unguarded) console.log(`     NO PERMISSION: ${r.key}`);

@@ -18,8 +18,8 @@
 import { Order } from '../models/Order.js';
 import { hashInvoiceToken } from '../models/Order.js';
 import { ORDER_STATUS } from '../constants/enums.js';
-import { RESTAURANT } from '../config/pos.js';
-import { loadCachedSettings } from '../models/PrinterSettings.js';
+import { Tenant } from '../models/Tenant.js';
+import { runUnscoped, runInTenant } from '../utils/tenantContext.js';
 import { parseInvoiceSlug } from '../utils/invoiceLink.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { toMajor } from '../utils/money.js';
@@ -42,7 +42,7 @@ import { toMajor } from '../utils/money.js';
  *   • the customer's phone — they know their own number, and printing it means
  *     a forwarded screenshot leaks it to whoever it was forwarded to
  */
-const publicInvoice = (order, settings) => ({
+const publicInvoice = (order, tenant) => ({
   invoiceNo: order.invoiceNo,
   orderNo: order.orderNo,
   status: order.status,
@@ -71,16 +71,19 @@ const publicInvoice = (order, settings) => ({
   total: toMajor(order.totalMinor),
 
   /**
-   * Configured name first, built-in constant as the floor. The empty-string
-   * defaults on the settings model are what make `||` correct here: an admin
-   * who clears the field gets the constant back, not a blank header.
+   * Who the customer bought from, read from the Tenant.
+   *
+   * `footerLine || tagline` because a restaurant that has written its own
+   * footer means it to replace the default greeting, and the schema's
+   * empty-string defaults are what make `||` correct — a cleared field falls
+   * through to the next option rather than printing a blank line.
    */
   restaurant: {
-    name: settings?.businessName || RESTAURANT.name,
-    tagline: settings?.footerLine || RESTAURANT.tagline,
-    address: settings?.businessAddress || '',
-    phone: settings?.businessPhone || '',
-    gstNumber: settings?.gstNumber || '',
+    name: tenant?.name || '',
+    tagline: tenant?.footerLine || tenant?.tagline || '',
+    address: tenant?.address || '',
+    phone: tenant?.phone || '',
+    gstNumber: tenant?.gstNumber || '',
   },
 });
 
@@ -109,13 +112,25 @@ export const getPublicInvoice = asyncHandler(async (req, res) => {
    * is then verified against what the token found, so a mismatched pair is
    * refused rather than serving whichever half matched.
    */
-  const order = await Order.findOne({ invoiceTokenHash: hashInvoiceToken(parsed.token) })
-    .select('+invoiceTokenHash')
-    .populate('table', 'name')
-    .populate('customer', 'name');
+  /*
+   * ── Resolving the restaurant from the token ──────────────────────────────
+   * A customer opening a receipt has no session and no tenant, so this first
+   * read is deliberately unscoped: the token is what identifies BOTH the order
+   * and the restaurant it belongs to. That is safe because invoiceTokenHash is
+   * 192 bits of CSPRNG output hashed with a server-side pepper — unguessable,
+   * and the only globally-unique index left on Order.
+   *
+   * No `.populate()` here. Everything that follows runs inside the resolved
+   * tenant, so every document this endpoint returns came out of a
+   * tenant-filtered query rather than being reached by an unscoped join.
+   */
+  const found = await runUnscoped('public invoice token -> tenant resolution', async () =>
+    Order.findOne({ invoiceTokenHash: hashInvoiceToken(parsed.token) })
+      .select('+invoiceTokenHash +tenantId')
+      .lean());
 
-  if (!order) throw ApiError.notFound('Invoice not found');
-  if (order.invoiceNo !== parsed.invoiceNo) throw ApiError.notFound('Invoice not found');
+  if (!found) throw ApiError.notFound('Invoice not found');
+  if (found.invoiceNo !== parsed.invoiceNo) throw ApiError.notFound('Invoice not found');
 
   /**
    * A token only exists once a bill is settled, so an open order cannot reach
@@ -125,12 +140,26 @@ export const getPublicInvoice = asyncHandler(async (req, res) => {
    * A VOIDED order still renders — the customer holding the link deserves to
    * see that the bill was cancelled rather than a dead page.
    */
-  if (order.status === ORDER_STATUS.OPEN) throw ApiError.notFound('Invoice not found');
+  if (found.status === ORDER_STATUS.OPEN) throw ApiError.notFound('Invoice not found');
 
-  // Loaded here and passed in, so publicInvoice stays a pure function.
-  const settings = await loadCachedSettings();
+  /*
+   * Re-read inside the restaurant the token resolved to. The second query
+   * costs one indexed lookup on a rate-limited public route and buys the
+   * guarantee above — that no populated table or customer name was fetched
+   * across a tenant boundary.
+   */
+  return runInTenant(found.tenantId, async () => {
+    const [order, tenant] = await Promise.all([
+      Order.findById(found._id).populate('table', 'name').populate('customer', 'name'),
+      // Tenant is not itself tenant-scoped, so it is addressed by id.
+      Tenant.findById(found.tenantId).lean(),
+    ]);
 
-  return sendSuccess(res, { invoice: publicInvoice(order, settings) });
+    // The order was there a moment ago; if it is not now, answer as always.
+    if (!order) throw ApiError.notFound('Invoice not found');
+
+    return sendSuccess(res, { invoice: publicInvoice(order, tenant) });
+  });
 });
 
 export default { getPublicInvoice };

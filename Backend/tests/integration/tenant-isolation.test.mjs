@@ -231,6 +231,71 @@ t('toJSON preserves the model\'s own transform (_id and __v still stripped)',
 t('toJSON preserves virtuals declared by the model', typeof serialised.id === 'string');
 
 await Widget.collection.drop().catch(() => {});
+
+// ---------------------------------------------------------------------------
+section('the real User model — staff PINs across restaurants');
+// ---------------------------------------------------------------------------
+/*
+ * The section above proves the plugin in isolation. This one proves the thing
+ * the customer actually asked for, on the real model, through the real lookup
+ * path that authController.loginStaff uses.
+ */
+const { User } = await import('../../src/models/User.js');
+const { Tenant } = await import('../../src/models/Tenant.js');
+const { ROLES } = await import('../../src/constants/enums.js');
+
+const makeTenant = (name) => runUnscoped('test: create a tenant', async () =>
+  Tenant.create({ name, slug: await Tenant.generateSlug(name) }));
+
+const makeCashier = (tenant, name, pin) => runInTenant(tenant._id, async () => {
+  const user = new User({ name, role: ROLES.CASHIER });
+  await user.setPin(pin);
+  return user.save();
+});
+
+const alpha = await makeTenant('Restaurant Alpha');
+const beta = await makeTenant('Restaurant Beta');
+const gamma = await makeTenant('Restaurant Gamma');
+
+await makeCashier(alpha, 'Alpha Cashier', '1234');
+
+let betaTookSamePin = true;
+let betaError = '';
+try {
+  await makeCashier(beta, 'Beta Cashier', '1234');
+} catch (err) {
+  betaTookSamePin = false;
+  betaError = err.message.slice(0, 120);
+}
+t('two restaurants can issue the SAME staff PIN', betaTookSamePin, betaError);
+
+let reusedInternally = false;
+try {
+  await makeCashier(alpha, 'Alpha Second', '1234');
+} catch (err) {
+  reusedInternally = err.code === 11000;
+}
+t('one restaurant still cannot issue the same PIN twice', reusedInternally);
+
+/*
+ * The authentication crux. Before scoping, findActiveByPin searched every user
+ * on the deployment, so this lookup could return the OTHER restaurant's
+ * cashier — a cross-restaurant sign-in.
+ */
+const viaAlpha = await runInTenant(alpha._id, async () => User.findActiveByPin('1234'));
+const viaBeta = await runInTenant(beta._id, async () => User.findActiveByPin('1234'));
+
+t('an Alpha terminal resolves Alpha\'s cashier',
+  viaAlpha?.name === 'Alpha Cashier', `resolved ${viaAlpha?.name}`);
+t('a Beta terminal resolves Beta\'s cashier',
+  viaBeta?.name === 'Beta Cashier', `resolved ${viaBeta?.name}`);
+t('the same four digits resolve to two different people',
+  String(viaAlpha?._id) !== String(viaBeta?._id));
+t('the resolved account verifies against the PIN', await viaBeta.verifyPin('1234'));
+t('a restaurant that never issued that PIN matches nobody',
+  (await runInTenant(gamma._id, async () => User.findActiveByPin('1234'))) === null);
+
+await wipe();
 await disconnect();
 
 process.exit(finish() ? 0 : 1);

@@ -7,7 +7,9 @@
  * that takes neighbouring keys with it — are all behaviour, and none of them
  * are visible in a regex over the file.
  */
+import mongoose from 'mongoose';
 import * as cache from '../src/utils/cache.js';
+import { runInTenant } from '../src/utils/tenantContext.js';
 import {
   isCacheableItemQuery,
   invalidateMenu,
@@ -28,10 +30,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 console.log('--- keys are namespaced ---');
 {
   const k = cache.key('menu', 'items');
-  t('key is prefixed with pos: and the tenant', k === 'pos:default:menu:items', k);
-  // The tenant segment is the whole point: it is what stops a multi-tenant
-  // future from having to find and re-key every entry in the codebase.
-  t('the tenant segment is present today', k.split(':')[1] === cache.DEFAULT_TENANT);
+  t('a key built outside a request falls back to the global namespace',
+    k === 'pos:global:menu:items', k);
+
+  /*
+   * The tenant segment is the whole point: it is what stops one restaurant's
+   * cached menu being served to another. Asserting that two restaurants
+   * produce DIFFERENT keys is the property — asserting the prefix merely
+   * describes the format.
+   */
+  const alpha = String(new mongoose.Types.ObjectId());
+  const beta = String(new mongoose.Types.ObjectId());
+  const alphaKey = runInTenant(alpha, () => cache.key('menu', 'items'));
+  const betaKey = runInTenant(beta, () => cache.key('menu', 'items'));
+
+  t('a key inside a request carries that restaurant\'s id',
+    alphaKey === `pos:${alpha}:menu:items`, alphaKey);
+  t('two restaurants never share a cache key for the same data',
+    alphaKey !== betaKey);
+  t('and neither collides with the global namespace',
+    alphaKey !== k && betaKey !== k);
 }
 
 console.log('\n--- get / set / del ---');

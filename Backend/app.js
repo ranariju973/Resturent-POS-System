@@ -24,6 +24,9 @@ import { sanitizeRequest, limitQueryComplexity } from './src/middleware/sanitize
 import { apiLimiter } from './src/middleware/rateLimit.js';
 import healthRoutes from './src/routes/health.js';
 import authRoutes from './src/routes/auth.js';
+import terminalRoutes from './src/routes/terminal.js';
+import tenantRoutes from './src/routes/tenants.js';
+import deviceRoutes from './src/routes/devices.js';
 import menuRoutes from './src/routes/menu.js';
 import tableRoutes from './src/routes/tables.js';
 import orderRoutes from './src/routes/orders.js';
@@ -164,6 +167,11 @@ app.use('/api', apiLimiter);
 // is still a way to spend the server's time.
 app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
+// Public: the login screen names the restaurant before anyone signs in.
+// See routes/terminal.js for why it is a separate file.
+app.use('/api/auth/terminal', terminalRoutes);
+app.use('/api/tenants', tenantRoutes);
+app.use('/api/devices', deviceRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/orders', orderRoutes);

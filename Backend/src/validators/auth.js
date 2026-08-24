@@ -8,27 +8,25 @@ import { z } from 'zod';
 import { PIN_LENGTH } from '../models/User.js';
 
 /**
- * Admin login.
+ * Google sign-in.
  *
- * The password has a maximum length, which looks odd until you consider that
- * bcrypt's cost is proportional to input size — an unbounded password field is
- * a CPU-exhaustion vector on an unauthenticated endpoint. 72 bytes is also
- * where bcrypt truncates, so nothing above it adds entropy anyway.
+ * The credential is the ID token Google Identity Services hands the page. Its
+ * contents are not validated here beyond shape and a sane length ceiling —
+ * everything that matters about it (signature, issuer, audience, expiry) is
+ * checked cryptographically against Google's published keys in the controller,
+ * and a schema that tried to pre-judge the payload would only be a second,
+ * weaker opinion about it.
+ *
+ * The length bound is the same reasoning as the old password field's: an
+ * unbounded string handed to a verifier is a CPU-exhaustion vector on an
+ * unauthenticated endpoint. Real Google ID tokens run well under 2KB.
  */
-export const adminLoginSchema = z
+export const googleLoginSchema = z
   .object({
-    email: z
-      .string({ required_error: 'Email is required' })
-      .trim()
-      .toLowerCase()
-      .min(3, 'Email is required')
-      .max(254, 'Email is too long')
-      .email('Invalid email address'),
-
-    password: z
-      .string({ required_error: 'Password is required' })
-      .min(1, 'Password is required')
-      .max(72, 'Password is too long'),
+    credential: z
+      .string({ required_error: 'Google credential is required' })
+      .min(1, 'Google credential is required')
+      .max(4096, 'Google credential is too long'),
   })
   .strict();
 
@@ -52,4 +50,4 @@ export const logoutSchema = z
   })
   .strict();
 
-export default { adminLoginSchema, staffLoginSchema, logoutSchema };
+export default { googleLoginSchema, staffLoginSchema, logoutSchema };

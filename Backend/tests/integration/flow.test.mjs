@@ -35,7 +35,7 @@ process.env.CORS_ORIGIN ??= 'http://localhost:5173';
 process.env.CLOUDINARY_CLOUD_NAME ??= 'test';
 process.env.CLOUDINARY_API_KEY ??= 'test';
 process.env.CLOUDINARY_API_SECRET ??= 'test';
-process.env.LOG_LEVEL = 'error';
+process.env.LOG_LEVEL = process.env.DEBUG_FLOW ? 'debug' : 'error';
 
 const { t, section, finish } = createReporter();
 
@@ -51,6 +51,8 @@ const { Order } = await import(`${ROOT}/src/models/Order.js`);
 const { Ticket } = await import(`${ROOT}/src/models/Ticket.js`);
 const { AuditLog } = await import(`${ROOT}/src/models/AuditLog.js`);
 const { ROLES } = await import(`${ROOT}/src/constants/enums.js`);
+const { Tenant } = await import(`${ROOT}/src/models/Tenant.js`);
+const { runInTenant, runUnscoped } = await import(`${ROOT}/src/utils/tenantContext.js`);
 
 const server = app.listen(0);
 await new Promise((r) => server.once('listening', r));
@@ -84,36 +86,65 @@ try {
   const CASHIER_PIN = '4242';
   const OVERRIDE_PIN = '9137';
 
-  const admin = new User({
-    name: 'Test Admin',
-    email: 'admin@integration.test',
-    role: ROLES.ADMIN,
-    isActive: true,
-  });
-  await admin.setPassword(ADMIN_PASSWORD);
-  await admin.setOverridePin(OVERRIDE_PIN);
-  await admin.save();
+  /*
+   * Everything below belongs to one restaurant.
+   *
+   * Fixtures are written through the models directly, which means they need a
+   * tenant in context — the tenantScoped plugin refuses an unscoped write
+   * rather than creating a record that belongs to nobody. The HTTP requests
+   * further down need no such wrapper: requireAuth resolves the tenant from
+   * the signed-in account and enters the context itself, which is the path a
+   * real request takes.
+   */
+  const tenant = await runUnscoped('integration fixtures: create the restaurant', async () =>
+    Tenant.create({ name: 'Integration Test Diner', slug: 'integration-test-diner' }));
 
-  const cashier = new User({ name: 'Test Cashier', role: ROLES.CASHIER, isActive: true });
-  await cashier.setPin(CASHIER_PIN);
-  await cashier.save();
+  const {
+    admin, cashier, category, coldBrew, soldOut, table,
+  } = await runInTenant(tenant._id, async () => {
+    const adminUser = new User({
+      name: 'Test Admin',
+      email: 'admin@integration.test',
+      role: ROLES.ADMIN,
+      isActive: true,
+    });
+    await adminUser.setPassword(ADMIN_PASSWORD);
+    await adminUser.setOverridePin(OVERRIDE_PIN);
+    await adminUser.save();
 
-  const category = await Category.create({ name: 'Beverages', color: '#00754A' });
-  const coldBrew = await MenuItem.create({
-    name: 'Cold Brew',
-    priceMinor: 425,
-    category: category._id,
-    available: true,
+    const cashierUser = new User({ name: 'Test Cashier', role: ROLES.CASHIER, isActive: true });
+    await cashierUser.setPin(CASHIER_PIN);
+    await cashierUser.save();
+
+    const cat = await Category.create({ name: 'Beverages', color: '#00754A' });
+    const brew = await MenuItem.create({
+      name: 'Cold Brew',
+      priceMinor: 425,
+      category: cat._id,
+      available: true,
+    });
+    const matcha = await MenuItem.create({
+      name: 'Iced Matcha',
+      priceMinor: 525,
+      category: cat._id,
+      available: false,
+    });
+    const t1 = await Table.create({ name: 'T1', seats: 4, zone: 'Indoor' });
+
+    return {
+      admin: adminUser,
+      cashier: cashierUser,
+      category: cat,
+      coldBrew: brew,
+      soldOut: matcha,
+      table: t1,
+    };
   });
-  const soldOut = await MenuItem.create({
-    name: 'Iced Matcha',
-    priceMinor: 525,
-    category: category._id,
-    available: false,
-  });
-  const table = await Table.create({ name: 'T1', seats: 4, zone: 'Indoor' });
 
   t('fixtures created', Boolean(admin._id && cashier._id && coldBrew._id && table._id));
+  t('and they all belong to the same restaurant',
+    [admin, cashier, category, coldBrew, table]
+      .every((doc) => String(doc.tenantId) === String(tenant._id)));
 
   // -------------------------------------------------------------------------
   section('authentication actually works');

@@ -56,8 +56,14 @@ t('secure in production', /secure:\s*env\.isProd/.test(jwtSrc));
 // Dev keeps 'strict' because Vite proxies /api onto a single origin.
 t('sameSite is strict in development', /env\.isProd\s*\?\s*'none'\s*:\s*'strict'/.test(jwtSrc));
 t('sameSite none is paired with secure', !/sameSite:\s*'none'/.test(jwtSrc) || /secure:\s*env\.isProd/.test(jwtSrc));
+/*
+ * Four sites now, not two: the refresh cookie's set/clear pair, and the device
+ * cookie's. A cookie only clears on an exact attribute match, so a device
+ * cookie set with one sameSite and cleared with another would be un-clearable
+ * — a terminal that could never be unlinked from the browser holding it.
+ */
 t('set and clear use the same sameSite value',
-  (jwtSrc.match(/sameSite:\s*REFRESH_COOKIE_SAME_SITE/g) || []).length === 2);
+  (jwtSrc.match(/sameSite:\s*REFRESH_COOKIE_SAME_SITE/g) || []).length === 4);
 t('scoped to /api/auth', /path:\s*'\/api\/auth'/.test(jwtSrc));
 t('refresh token never returned in a response body',
   !/sendSuccess\([^)]*refreshToken/.test(ctlSrc) && !/refreshToken:/.test(ctlSrc));
@@ -102,8 +108,18 @@ console.log('\n--- login does not leak which accounts exist ---');
 t('single shared failure message', /GENERIC_LOGIN_FAILURE\s*=\s*'Invalid credentials'/.test(ctlSrc));
 const failureThrows = ctlSrc.match(/ApiError\.unauthorized\(GENERIC_LOGIN_FAILURE\)/g) || [];
 t(`every login failure path uses it (${failureThrows.length} sites)`, failureThrows.length >= 4);
-t('unknown account still burns bcrypt time (timing oracle closed)',
-  /burnTiming/.test(ctlSrc) && /await burnTiming\(password\)/.test(ctlSrc) && /await burnTiming\(pin\)/.test(ctlSrc));
+/*
+ * Only the PIN path burns time now.
+ *
+ * Google sign-in needs no such defence and gains nothing from one: there is no
+ * stored secret to compare, so there is no fast path for a missing account and
+ * no slow path for a present one. The ID token already proves who the caller
+ * is, which is why the handler can answer immediately without becoming an
+ * enumeration oracle.
+ */
+t('unknown PIN still burns bcrypt time (timing oracle closed)',
+  /burnTiming/.test(ctlSrc) && /await burnTiming\(pin\)/.test(ctlSrc));
+t('no password path remains to defend', !/burnTiming\(password\)/.test(ctlSrc));
 t('decoy hash uses the real bcrypt cost', /decoyHashPromise[\s\S]{0,120}BCRYPT_COST/.test(ctlSrc));
 t('lockout does not confirm the account exists (generic throw after lock)',
   /nowLocked[\s\S]{0,600}ApiError\.unauthorized\(GENERIC_LOGIN_FAILURE\)/.test(ctlSrc));
@@ -138,14 +154,23 @@ t('login limiter: 5 attempts', /loginLimiter[\s\S]{0,300}max:\s*5/.test(rlSrc));
 t('login limiter window is 15 minutes', /loginLimiter[\s\S]{0,300}windowMs:\s*15 \* 60 \* 1000/.test(rlSrc));
 t('successful logins do not consume the budget', /skipSuccessfulRequests:\s*true/.test(rlSrc));
 t('IPv6 normalised so prefix rotation cannot reset the counter', /ipKeyGenerator/.test(rlSrc));
-t('admin login route is limited', /login\/admin',\s*loginLimiter/.test(routeSrc));
+t('google sign-in route is limited', /'\/google',\s*loginLimiter/.test(routeSrc));
+// The password door is gone, not merely unused: a dormant route is one edit
+// away from being a second way in that nobody is reviewing.
+t('there is no admin password route at all', !/login\/admin/.test(routeSrc));
 t('staff login route is limited', /login\/staff',\s*loginLimiter/.test(routeSrc));
 t('refresh route is limited', /refresh',\s*refreshLimiter/.test(routeSrc));
 
 console.log('\n--- input validation ---');
 t('every auth schema is .strict() (unknown keys rejected)',
   (valSrc.match(/\.strict\(\)/g) || []).length >= 3);
-t('password length capped (bcrypt CPU-exhaustion guard)', /max\(72/.test(valSrc));
+/*
+ * The same reasoning the password cap embodied, applied to what replaced it:
+ * an unbounded string handed to a verifier on an unauthenticated endpoint is a
+ * CPU-exhaustion vector. Real Google ID tokens run well under 2KB.
+ */
+t('google credential length capped (CPU-exhaustion guard)', /max\(4096/.test(valSrc));
+t('no password schema remains', !/password/i.test(valSrc));
 t('PIN constrained to exact digit count', /\\\\d\{\$\{PIN_LENGTH\}\}/.test(valSrc) || /PIN_LENGTH/.test(valSrc));
 t('all login routes run validate()', (routeSrc.match(/validate\(\{ body:/g) || []).length >= 3);
 t('/me is behind requireAuth', /get\('\/me',\s*requireAuth\(\)/.test(routeSrc));

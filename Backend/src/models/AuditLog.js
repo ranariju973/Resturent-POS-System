@@ -12,6 +12,7 @@
  */
 import mongoose from 'mongoose';
 import { AUDIT_ACTION_VALUES } from '../constants/enums.js';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 /** Never persist these, whatever a caller passes in `meta`. */
 const REDACTED_META_KEYS = new Set([
@@ -81,10 +82,22 @@ auditLogSchema.virtual('id').get(function idGetter() {
   return this._id?.toHexString?.() ?? this._id;
 });
 
+/*
+ * `required: false`, unlike every other scoped model.
+ *
+ * Most audit entries belong to a restaurant and are stamped automatically. A
+ * few genuinely do not: a failed sign-in where no account could be resolved,
+ * and the actions of a Google user who has authenticated but not yet named a
+ * restaurant. Those are exactly the events an audit trail must not drop, so
+ * the field is optional here and the writer says `tenantId: null` explicitly
+ * to reach that path (see record() below).
+ */
+auditLogSchema.plugin(tenantScoped, { required: false });
+
 // The admin audit view: filter by actor or action over a date range.
-auditLogSchema.index({ at: -1 });
-auditLogSchema.index({ actor: 1, at: -1 });
-auditLogSchema.index({ action: 1, at: -1 });
+auditLogSchema.index({ tenantId: 1, at: -1 });
+auditLogSchema.index({ tenantId: 1, actor: 1, at: -1 });
+auditLogSchema.index({ tenantId: 1, action: 1, at: -1 });
 
 /**
  * Ninety-day retention, enforced by the database.
@@ -100,6 +113,15 @@ auditLogSchema.index({ action: 1, at: -1 });
  *
  * NOTE: this is a retention POLICY, not a storage trick. Lengthening it later
  * is safe; shortening it destroys history that is already gone by then.
+ *
+ * ── Do not add tenantId to this one ────────────────────────────────────────
+ * Every other index in this file gained a tenantId prefix. This one must not:
+ * expireAfterSeconds is only valid on a SINGLE-FIELD index, and MongoDB
+ * rejects a compound one outright —
+ *   "TTL indexes are single-field indexes, compound indexes do not support TTL"
+ * — so making this {tenantId, at} for consistency would fail the index sync
+ * and, with it, the boot. Retention is a deployment-wide policy anyway, not a
+ * per-restaurant one.
  */
 const AUDIT_RETENTION_DAYS = 90;
 auditLogSchema.index({ at: 1 }, { expireAfterSeconds: AUDIT_RETENTION_DAYS * 24 * 60 * 60 });
@@ -147,6 +169,37 @@ auditLogSchema.pre('findOneAndUpdate', blockUpdate);
  */
 auditLogSchema.statics.record = async function record(entry, req, options = {}) {
   try {
+    /*
+     * Some entries are written with no restaurant in context, and that is
+     * correct rather than a gap: a failed sign-in, or a Google user who has
+     * not yet named a restaurant, genuinely belongs to none. The plugin would
+     * refuse such a write, so those callers pass `tenantId: null` explicitly
+     * and this hands the write to runUnscoped.
+     *
+     * Only when the caller SAYS so. An entry that merely forgot its context
+     * still throws, which is what keeps this from becoming a quiet way to
+     * write unscoped rows.
+     */
+    if (entry.tenantId === null) {
+      const { runUnscoped } = await import('../utils/tenantContext.js');
+      return runUnscoped('audit entry with no restaurant (pre-onboarding or failed login)',
+        async () => {
+          const unscoped = new this({
+            ...entry,
+            tenantId: undefined,
+            actor: entry.actor ?? req?.user?.id ?? null,
+            actorName: entry.actorName ?? req?.user?.name ?? '',
+            actorRole: entry.actorRole ?? req?.user?.role ?? '',
+            ip: entry.ip ?? req?.ip ?? '',
+            userAgent: entry.userAgent ?? req?.get?.('user-agent')?.slice(0, 300) ?? '',
+            requestId: entry.requestId ?? req?.id ?? '',
+            at: entry.at ?? new Date(),
+          });
+          await unscoped.save(options.session ? { session: options.session } : {});
+          return unscoped;
+        });
+    }
+
     const doc = new this({
       ...entry,
       actor: entry.actor ?? req?.user?.id ?? null,

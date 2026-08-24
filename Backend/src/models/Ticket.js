@@ -11,6 +11,7 @@
  * ready) for later reporting.
  */
 import mongoose from 'mongoose';
+import { tenantScoped } from './plugins/tenantScoped.js';
 import {
   TICKET_STATUS,
   TICKET_STATUS_VALUES,
@@ -31,11 +32,15 @@ const statusEntrySchema = new mongoose.Schema(
 
 const ticketSchema = new mongoose.Schema(
   {
+    /*
+     * Exactly one ticket per order. The uniqueness is declared through the
+     * tenantScoped plugin as {tenantId, order} rather than inline — see the
+     * index block below.
+     */
     order: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Order',
       required: true,
-      unique: true, // exactly one ticket per order
     },
 
     /** Display number, mirrors the order's daily sequence. */
@@ -94,16 +99,30 @@ ticketSchema.virtual('nextStatus').get(function nextStatus() {
   return NEXT_TICKET_STATUS[this.status] ?? null;
 });
 
+/*
+ * One ticket per order, enforced by the database.
+ *
+ * Declared here rather than inline on the field so the key is {tenantId,
+ * order}. An order id is a globally unique ObjectId, so this particular
+ * constraint would still have been correct as a global index — it is scoped
+ * anyway so that the index is usable by the tenant filter the plugin injects
+ * into every query, instead of being a second lookup path the planner has to
+ * choose between.
+ */
+ticketSchema.plugin(tenantScoped, {
+  unique: [{ fields: { order: 1 } }],
+});
+
 // The kitchen board query: everything not yet served, oldest first.
-ticketSchema.index({ status: 1, placedAt: 1 });
-ticketSchema.index({ placedAt: -1 });
+ticketSchema.index({ tenantId: 1, status: 1, placedAt: 1 });
+ticketSchema.index({ tenantId: 1, placedAt: -1 });
 /**
  * The board also keeps recently-served tickets visible for a grace period —
  * getBoard's $or has a { status: SERVED, updatedAt: { $gte } } branch. Served
  * tickets are the ones that accumulate, so without this index that branch
  * degrades toward a full scan a little more with every service.
  */
-ticketSchema.index({ status: 1, updatedAt: -1 });
+ticketSchema.index({ tenantId: 1, status: 1, updatedAt: -1 });
 
 /** Seed the history with the opening status. */
 ticketSchema.pre('save', function seedHistory(next) {

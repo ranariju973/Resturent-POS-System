@@ -54,15 +54,70 @@ t(`${moneyFields.length} money fields declared via minorField()`, moneyFields.le
 t('no bare Number money field named price/total/amount', !/\b(price|total|subtotal|amount):\s*\{\s*type:\s*Number/.test(read('Order.js')+read('MenuItem.js')+read('Expense.js')));
 
 console.log('\n--- indexes declared for the hot queries ---');
-t('Order: status + createdAt', /index\(\{ status: 1, createdAt: -1 \}\)/.test(o));
+/*
+ * Asserted against the COMPILED schema rather than the source text.
+ *
+ * These were regexes over the file, which broke the moment every index gained
+ * a tenantId prefix — and would have broken again on any reformatting. What
+ * the test actually means is "an index with this key shape exists", so ask the
+ * schema. It also catches an index declared through the tenantScoped plugin,
+ * which a source regex cannot see at all.
+ */
+const { default: mongoose } = await import('mongoose');
+await import(`${ROOT}/src/models/index.js`);
+
+/** Does `model` declare an index whose key is exactly these fields, in order? */
+const hasIndex = (model, ...fields) =>
+  mongoose.models[model].schema.indexes()
+    .some(([key]) => JSON.stringify(Object.keys(key)) === JSON.stringify(fields));
+
+/** ...and is it unique? */
+const hasUniqueIndex = (model, ...fields) =>
+  mongoose.models[model].schema.indexes()
+    .some(([key, opts]) => opts?.unique
+      && JSON.stringify(Object.keys(key)) === JSON.stringify(fields));
+
+t('Order: tenant + status + createdAt', hasIndex('Order', 'tenantId', 'status', 'createdAt'));
 // Reports and the dashboard match on paidAt, not createdAt. Without this the
 // index above is a near-miss: right field, wrong sort key, in-memory date filter.
-t('Order: status + paidAt (reports)', /index\(\{ status: 1, paidAt: -1 \}\)/.test(o));
-t('Ticket: status + placedAt', /index\(\{ status: 1, placedAt: 1 \}\)/.test(read('Ticket.js')));
+t('Order: tenant + status + paidAt (reports)', hasIndex('Order', 'tenantId', 'status', 'paidAt'));
+t('Ticket: tenant + status + placedAt', hasIndex('Ticket', 'tenantId', 'status', 'placedAt'));
 // The board's grace-period branch for recently-served tickets.
-t('Ticket: status + updatedAt (board)', /index\(\{ status: 1, updatedAt: -1 \}\)/.test(read('Ticket.js')));
-t('Customer: unique phone', /phoneNormalized[\s\S]{0,80}unique: true/.test(read('Customer.js')));
-t('MenuItem: POS grid composite', /index\(\{ isActive: 1, available: 1, category: 1 \}\)/.test(read('MenuItem.js')));
+t('Ticket: tenant + status + updatedAt (board)',
+  hasIndex('Ticket', 'tenantId', 'status', 'updatedAt'));
+t('Customer: unique phone, per restaurant',
+  hasUniqueIndex('Customer', 'tenantId', 'phoneNormalized'));
+t('MenuItem: POS grid composite',
+  hasIndex('MenuItem', 'tenantId', 'isActive', 'available', 'category'));
+
+console.log('\n--- every credential is unique PER RESTAURANT, never globally ---');
+/*
+ * The staff-PIN bug in one assertion. A GLOBAL unique index on pinLookup meant
+ * one restaurant claiming a PIN denied it to every other, and worse, let a
+ * lookup match another restaurant's row.
+ */
+for (const field of ['email', 'pinLookup', 'overridePinLookup']) {
+  t(`User.${field} is unique within a restaurant`, hasUniqueIndex('User', 'tenantId', field));
+  t(`User.${field} is NOT globally unique`, !hasUniqueIndex('User', field));
+}
+
+t('Order.invoiceNo is unique per restaurant', hasUniqueIndex('Order', 'tenantId', 'invoiceNo'));
+/*
+ * The one deliberate exception. A customer opening a receipt link has no
+ * session and no restaurant — the token in the URL is what resolves both, so
+ * it cannot itself be scoped by the thing it resolves.
+ */
+t('Order.invoiceTokenHash stays globally unique (it resolves the restaurant)',
+  hasUniqueIndex('Order', 'invoiceTokenHash'));
+
+/*
+ * A compound TTL index is rejected by MongoDB outright, so this one must stay
+ * single-field or the index sync — and the boot — fails.
+ */
+const auditTtl = mongoose.models.AuditLog.schema.indexes()
+  .find(([, opts]) => opts?.expireAfterSeconds !== undefined);
+t('AuditLog retention TTL is still a single-field index',
+  Boolean(auditTtl) && Object.keys(auditTtl[0]).length === 1 && auditTtl[0].at === 1);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

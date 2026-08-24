@@ -119,10 +119,10 @@ t('the query keys on the token hash',
 // If the number were the key, incrementing it would walk the day's takings.
 t('the invoice number is NOT a query key', !/findOne\(\{ invoiceNo/.test(ctl));
 t('but it is verified against what the token found',
-  /order\.invoiceNo !== parsed\.invoiceNo/.test(ctl));
+  /found\.invoiceNo !== parsed\.invoiceNo/.test(ctl));
 t('every failure is the same 404, so the route is not an oracle',
   (ctl.match(/notFound\('Invoice not found'\)/g) ?? []).length >= 4);
-t('an unpaid order is refused', /order\.status === ORDER_STATUS\.OPEN/.test(ctl));
+t('an unpaid order is refused', /found\.status === ORDER_STATUS\.OPEN/.test(ctl));
 
 console.log('\n--- the public shape leaks nothing about the business ---');
 // publicOrder in orderController is the STAFF shape and carries all of these.

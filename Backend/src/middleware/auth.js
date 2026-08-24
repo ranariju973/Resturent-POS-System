@@ -22,6 +22,7 @@ import { verifyAccessToken } from '../utils/jwt.js';
 import { ApiError } from '../utils/apiResponse.js';
 import { User } from '../models/User.js';
 import { logger } from '../utils/logger.js';
+import { runInTenant } from '../utils/tenantContext.js';
 import { rememberUser } from '../utils/userCache.js';
 
 /**
@@ -48,7 +49,7 @@ import { rememberUser } from '../utils/userCache.js';
 function loadUser(id) {
   return rememberUser(id, () =>
     User.findById(id)
-      .select('_id name role isActive tokenVersion email avatarUrl lastLoginAt')
+      .select('_id name role isActive tokenVersion email avatarUrl lastLoginAt tenantId')
       .lean(),
   );
 }
@@ -119,6 +120,27 @@ export function requireAuth() {
         return next(ApiError.unauthorized());
       }
 
+      /*
+       * Which restaurant — from the DATABASE, with the token's claim used only
+       * to detect disagreement.
+       *
+       * Same rule as `role` above, for the same reason: the token proves
+       * identity, the database decides authorisation, and belonging to a
+       * restaurant is an authorisation fact. The claim is compared rather than
+       * trusted so that a token minted before an account was moved between
+       * restaurants — or against a database that has since been replaced —
+       * fails closed instead of silently re-scoping the session.
+       */
+      const tokenTenant = payload.tid ?? '';
+      const actualTenant = user.tenantId ? String(user.tenantId) : '';
+      if (tokenTenant !== actualTenant) {
+        logger.warn('Rejected token whose restaurant no longer matches the account', {
+          requestId: req.id,
+          userId: String(user._id),
+        });
+        return next(ApiError.unauthorized());
+      }
+
       req.user = {
         id: String(user._id),
         // From the database, NOT from payload.role.
@@ -126,10 +148,38 @@ export function requireAuth() {
         name: user.name,
         isActive: user.isActive,
         tokenVersion: user.tokenVersion ?? 0,
+        tenantId: user.tenantId ?? null,
       };
       req.authUser = user;
+      /*
+       * Null for an account that has authenticated but not yet named a
+       * restaurant. withTenantContext refuses to enter a context for it, and
+       * every scoped query then throws — which is what limits such a session
+       * to the two endpoints onboarding needs.
+       */
+      req.tenantId = user.tenantId ?? null;
 
-      return next();
+      /*
+       * Enter the restaurant here, not in a separate app-level middleware.
+       *
+       * This looked like it belonged in its own middleware mounted on /api —
+       * one line instead of a change to this file. It does not work: Express
+       * runs app-level middleware BEFORE a router's own `router.use(...)`, so
+       * such a middleware would always run before this handler and would find
+       * req.tenantId unset on every request.
+       *
+       * The tenant becomes known exactly here, so the context is entered
+       * exactly here. `next()` is called INSIDE runInTenant, which puts the
+       * whole downstream chain — every handler, every await, every query —
+       * inside it.
+       *
+       * An account with no restaurant yet (a Google user mid-onboarding)
+       * passes through with no context. Every scoped query then throws, which
+       * is precisely what limits that session to the endpoints onboarding
+       * needs.
+       */
+      if (!req.tenantId) return next();
+      return runInTenant(req.tenantId, () => next());
     } catch (err) {
       return next(err);
     }

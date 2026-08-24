@@ -68,12 +68,21 @@ const SCOPED_QUERIES = [
  *   restaurant A taking a staff PIN would stop restaurant B from using it.
  */
 export function tenantScoped(schema, { required = true, unique = [] } = {}) {
+  /*
+   * A unique index on tenantId ALONE — the "one document per restaurant" case,
+   * used by PrinterSettings — is the same key as a plain lookup index would
+   * be. Declaring both makes Mongoose warn about a duplicate and leaves
+   * MongoDB holding two indexes to do one job, so in that case the unique
+   * index declared below is the only one, and it serves both purposes.
+   */
+  const uniqueOnTenantAlone = unique.some(({ fields }) => Object.keys(fields).length === 0);
+
   schema.add({
     tenantId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Tenant',
       required,
-      index: true,
+      index: !uniqueOnTenantAlone,
     },
   });
 

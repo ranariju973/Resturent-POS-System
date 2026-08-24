@@ -18,6 +18,7 @@ import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { AUDIT_ACTION, PIN_ROLES, ROLE_LABELS } from '../constants/enums.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
+import { requireTenantId } from '../utils/tenantContext.js';
 
 /** 'YYYY-MM-DD' -> the Date the model stores. */
 const toDay = (iso) => new Date(`${iso}T00:00:00.000Z`);
@@ -126,13 +127,30 @@ export const markAttendanceDay = asyncHandler(async (req, res) => {
     );
   }
 
+  /*
+   * ── The one place tenantId must be written by hand ────────────────────────
+   * Every other query in this codebase is scoped automatically by the
+   * tenantScoped plugin, which hooks Mongoose's query middleware. bulkWrite
+   * runs NO query middleware, so nothing here is filtered or stamped unless it
+   * says so explicitly.
+   *
+   * Both halves matter. Without it in `filter`, an upsert could match another
+   * restaurant's row for the same employee id and date and overwrite it.
+   * Without it in `$setOnInsert`, a newly created record would belong to no
+   * restaurant and fail its own required check.
+   *
+   * tests/tenant-coverage.test.mjs asserts this specific call site, because it
+   * is the single gap the plugin cannot close for us.
+   */
+  const tenantId = requireTenantId('markAttendanceDay');
+
   await Attendance.bulkWrite(
     entries.map((entry) => ({
       updateOne: {
-        filter: { employee: entry.employee, date: day },
+        filter: { tenantId, employee: entry.employee, date: day },
         update: {
           $set: { status: entry.status, notes: entry.notes ?? '', markedBy: req.user.id },
-          $setOnInsert: { employee: entry.employee, date: day },
+          $setOnInsert: { tenantId, employee: entry.employee, date: day },
         },
         upsert: true,
       },

@@ -16,10 +16,9 @@
  * day — the in-memory rate limiter and the in-process SSE bus.
  *
  * ── Keys ───────────────────────────────────────────────────────────────────
- * Every key is built through `key()`, which prefixes a tenant. There is one
- * tenant today and it is hardcoded, which costs nothing now and means a
- * multi-tenant future does not have to find and re-key every cache entry —
- * the alternative being one restaurant's dashboard served to another.
+ * Every key is built through `key()`, which prefixes the tenant taken from the
+ * ambient request context. That prefix is what stops one restaurant's cached
+ * dashboard, menu or receipt header being served to another.
  *
  * ── What this is NOT ───────────────────────────────────────────────────────
  * There is no bound on entry count. Every current caller uses a small, fixed
@@ -29,20 +28,38 @@
  * policy first, or this becomes a memory leak with a friendly interface.
  */
 import { logger } from './logger.js';
+import { getTenantId } from './tenantContext.js';
 
 /** @type {Map<string, { value: unknown, expiresAt: number }>} */
 const store = new Map();
 
 /**
- * The single tenant, until there are more.
- *
- * Reading it from one place means the multi-tenant change is "make this a
- * parameter", not "audit every key in the codebase".
+ * Used when a key is built outside any request — a boot-time warm-up, a
+ * script. Never reached on a normal request path, where a tenant is always in
+ * context.
  */
-export const DEFAULT_TENANT = 'default';
+export const GLOBAL_TENANT = 'global';
 
-/** Build a namespaced key: `pos:{tenant}:{parts...}`. */
-export const key = (...parts) => `pos:${DEFAULT_TENANT}:${parts.join(':')}`;
+/**
+ * Build a namespaced key: `pos:{tenant}:{parts...}`.
+ *
+ * The tenant comes from the ambient request context, which is what keeps one
+ * restaurant's cached menu, dashboard or receipt header from being served to
+ * another. Every existing call site kept working unchanged when this became
+ * tenant-aware — the seam this file's header describes was built for exactly
+ * this change.
+ *
+ * A key built with no tenant falls back to a `global` namespace rather than
+ * throwing. That is deliberate and is NOT the same leniency the model plugin
+ * refuses: an unscoped cache key can only ever collide with other unscoped
+ * keys, so the failure mode is a wasted cache slot, not one restaurant reading
+ * another's data. The queries behind these entries are themselves scoped and
+ * would throw on their own.
+ */
+export const key = (...parts) => {
+  const tenantId = getTenantId();
+  return `pos:${tenantId ?? GLOBAL_TENANT}:${parts.join(':')}`;
+};
 
 /**
  * Read a live entry, or null.
@@ -113,4 +130,4 @@ if (process.env.NODE_ENV !== 'test') {
   logger.debug('Cache initialised (in-process)');
 }
 
-export default { key, get, set, del, delPrefix, remember, clearAll, size, DEFAULT_TENANT };
+export default { key, get, set, del, delPrefix, remember, clearAll, size, GLOBAL_TENANT };
