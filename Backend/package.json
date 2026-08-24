@@ -19,7 +19,8 @@
     "verify": "node tests/run.mjs",
     "verify:all": "node tests/run.mjs --integration",
     "test:integration": "node tests/integration/flow.test.mjs",
-    "docs": "node scripts/generate-api-docs.mjs"
+    "docs": "node scripts/generate-api-docs.mjs",
+    "adopt-legacy": "node src/scripts/adoptLegacyData.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
