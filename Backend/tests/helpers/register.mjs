@@ -19,6 +19,10 @@ process.env.JWT_ACCESS_SECRET ??= 'a'.repeat(64);
 process.env.JWT_REFRESH_SECRET ??= 'b'.repeat(64);
 process.env.PIN_PEPPER ??= 'c'.repeat(64);
 process.env.INVOICE_TOKEN_PEPPER ??= 'v'.repeat(64);
+// Distinct letters, not shared: config/env.js refuses to boot when any two
+// secrets match, so reusing one here would fail every suite at import time.
+process.env.DEVICE_TOKEN_PEPPER ??= 'd'.repeat(64);
+process.env.GOOGLE_CLIENT_ID ??= 'test-client.apps.googleusercontent.com';
 process.env.CORS_ORIGIN ??= 'http://localhost:5173';
 process.env.CLOUDINARY_CLOUD_NAME ??= 'test';
 process.env.CLOUDINARY_API_KEY ??= 'test';
