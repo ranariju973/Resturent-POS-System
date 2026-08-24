@@ -13,13 +13,19 @@ pasted into a chat transcript. Regenerate all of them:
 node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"   # x3
 ```
 
-- [ ] `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `PIN_PEPPER` — all three
-      different. **Changing `PIN_PEPPER` invalidates every stored staff PIN**,
-      so do it before staff exist or plan to re-seed.
-- [ ] `SEED_ADMIN_PASSWORD` — still the generated placeholder
-- [ ] `SEED_ADMIN_OVERRIDE_PIN` — currently `4417`
+- [ ] `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `PIN_PEPPER`,
+      `INVOICE_TOKEN_PEPPER`, `DEVICE_TOKEN_PEPPER` — all five different. The
+      server refuses to start if any two match.
+
+      Three of them are effectively permanent once in use:
+      `PIN_PEPPER` invalidates every stored staff PIN, `INVOICE_TOKEN_PEPPER`
+      breaks every receipt link already sent to a customer, and
+      `DEVICE_TOKEN_PEPPER` un-links every terminal.
 - [ ] MongoDB Atlas password
 - [ ] Cloudinary API secret
+
+There is no admin password to rotate. Administrators sign in with Google, and
+the OAuth client *secret* is not used anywhere in this project.
 
 ### 2. Replace `bcrypt` with `bcryptjs`
 
@@ -59,6 +65,13 @@ never cooks.
 
 ### 5. Database
 
+> **Upgrading to the multi-tenant release?** Running `sync-indexes` is not
+> optional. The old database carries a GLOBAL unique index on `pinLookup` and
+> `email`; until those are replaced by the tenant-scoped ones, two restaurants
+> still cannot issue the same staff PIN — the exact bug the release exists to
+> fix. `syncIndexes()` drops what the schemas no longer declare, so one run
+> reconciles both directions.
+
 - [ ] Connection string uses a user scoped to **this database only**, not a
       cluster admin
 - [ ] Atlas Network Access allows the deployment's IP, not `0.0.0.0/0`
@@ -91,7 +104,8 @@ The app does **not** terminate TLS. Put it behind a proxy or platform that does.
 ### 7. Seed and verify
 
 ```bash
-npm run seed                    # admin only — do NOT use --demo in production
+# No admin seed exists. The first person to sign in with Google is asked to
+# name a restaurant and becomes its administrator — see the root DEPLOYMENT.md.
 npm run dev
 curl -s https://your-domain/api/health      # expect "db":"up"
 ```
