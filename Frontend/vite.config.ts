@@ -26,6 +26,43 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const target = env.VITE_PROXY_TARGET ?? 'http://localhost:5001';
 
+  /*
+   * ── Fail the BUILD, not the login screen ─────────────────────────────────
+   * Vite inlines VITE_* at build time. A production bundle built without
+   * VITE_GOOGLE_CLIENT_ID deploys perfectly happily and then cannot sign
+   * anybody in — administrators have no other door, so the whole POS is
+   * unusable, and the only symptom is a message on a screen nobody is
+   * watching during a deploy.
+   *
+   * A hosting provider's environment variables are scoped per environment
+   * (Production / Preview / Development) and are read when the build RUNS, so
+   * "I added it" and "the build saw it" are genuinely different facts. This
+   * turns that difference into a failed deploy with the reason attached,
+   * which is the cheapest possible place to find out.
+   *
+   * Development is exempt: working on the till's layout should not require
+   * Google credentials.
+   */
+  if (mode === 'production' && !env.VITE_GOOGLE_CLIENT_ID) {
+    throw new Error(
+      [
+        '',
+        'VITE_GOOGLE_CLIENT_ID is not set, so this build could not sign anyone in.',
+        '',
+        'Administrators authenticate with Google and have no other way in, so a',
+        'bundle without it is a POS nobody can open. Refusing to build it.',
+        '',
+        'On Vercel: Settings -> Environment Variables. Add VITE_GOOGLE_CLIENT_ID',
+        'and make sure the PRODUCTION environment is ticked — a variable scoped',
+        'only to Preview is invisible to a production build. Then redeploy:',
+        'changing a variable does not rebuild on its own.',
+        '',
+        'Locally: put it in Frontend/.env.local and restart the dev server.',
+        '',
+      ].join('\n'),
+    );
+  }
+
   return {
     plugins: [react()],
     build: {
