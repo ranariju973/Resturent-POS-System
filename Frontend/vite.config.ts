@@ -27,65 +27,74 @@ export default defineConfig(({ mode }) => {
   const target = env.VITE_PROXY_TARGET ?? 'http://localhost:5001';
 
   /*
-   * ── Fail the BUILD, not the login screen ─────────────────────────────────
+   * ── A bundle that cannot sign anyone in ──────────────────────────────────
    * Vite inlines VITE_* at build time. A production bundle built without
    * VITE_GOOGLE_CLIENT_ID deploys perfectly happily and then cannot sign
    * anybody in — administrators have no other door, so the whole POS is
    * unusable, and the only symptom is a message on a screen nobody is
    * watching during a deploy.
    *
-   * A hosting provider's environment variables are scoped per environment
-   * (Production / Preview / Development) and are read when the build RUNS, so
-   * "I added it" and "the build saw it" are genuinely different facts. This
-   * turns that difference into a failed deploy with the reason attached,
-   * which is the cheapest possible place to find out.
+   * ── Why this is not always fatal ─────────────────────────────────────────
+   * The first version of this check threw on every production build, which
+   * broke CI. That was wrong, and the distinction it missed is real:
    *
-   * Development is exempt: working on the till's layout should not require
-   * Google credentials.
+   *   • A DEPLOY produces a bundle that real staff will be served. Shipping
+   *     one nobody can sign into is worse than not shipping, so it throws.
+   *   • CI runs the same command to prove the code COMPILES. That artifact is
+   *     discarded. Demanding a Google credential there would mean putting one
+   *     in CI for a bundle nobody will ever load, which buys nothing and adds
+   *     a secret to leak.
+   *
+   * So it fails where the bundle is about to be served, and warns everywhere
+   * else. `VERCEL` is set by Vercel's builder; `DEPLOY_BUILD=1` is the manual
+   * lever for any other host.
    */
   if (mode === 'production' && !env.VITE_GOOGLE_CLIENT_ID) {
+    const isDeploy = Boolean(
+      process.env.VERCEL || process.env.VERCEL_ENV || process.env.DEPLOY_BUILD,
+    );
+
     /*
-     * Show what the build CAN see.
-     *
-     * The first version of this message listed things to go and check, which
-     * is a guess dressed up as instructions. The list below is evidence: if
-     * other VITE_* names appear, variables reach the build fine and this one
-     * specifically is misnamed or scoped wrong; if the list is empty, nothing
-     * reaches the build at all and the problem is the project or environment,
-     * not the variable.
+     * What the build can actually see — evidence rather than a list of things
+     * to go and check. Other names present means variables arrive fine and
+     * this one is misnamed or scoped wrong; an empty list means none arrive,
+     * so the problem is the project or environment, not the variable.
      */
     const visible = Object.keys({ ...env, ...process.env })
       .filter((k) => k.startsWith('VITE_'))
       .sort();
 
-    throw new Error(
-      [
-        '',
-        'VITE_GOOGLE_CLIENT_ID is not set, so this build could not sign anyone in.',
-        '',
-        'Administrators authenticate with Google and have no other way in, so a',
-        'bundle without it is a POS nobody can open. Refusing to build it.',
-        '',
-        visible.length
-          ? `VITE_* variables this build CAN see: ${visible.join(', ')}`
-          : 'This build can see NO VITE_* variables at all.',
-        '',
-        visible.length
-          ? 'Others got through, so this one is misnamed or scoped differently.'
-            + ' The name is case-sensitive and must match exactly.'
-          : 'None got through, so the problem is not this variable — check that the'
-            + ' deploy belongs to the project the variables were added to.',
-        '',
-        'On Vercel: Settings -> Environment Variables.',
-        '  • PRODUCTION must be ticked. A variable scoped only to Preview is',
-        '    invisible to a production build.',
-        '  • It must NOT be marked Sensitive. Sensitive variables are withheld',
-        '    from the build step, which is the only place Vite can read one.',
-        '  • Redeploy afterwards. Changing a variable never rebuilds on its own.',
-        '',
-        'Locally: put it in Frontend/.env.local and restart the dev server.',
-        '',
-      ].join('\n'),
+    const detail = [
+      '',
+      'VITE_GOOGLE_CLIENT_ID is not set, so this bundle cannot sign anyone in.',
+      'Administrators authenticate with Google and have no other way in.',
+      '',
+      visible.length
+        ? `VITE_* variables this build can see: ${visible.join(', ')}`
+        : 'This build can see NO VITE_* variables at all.',
+      visible.length
+        ? 'Others got through, so this one is misnamed or scoped differently.'
+          + ' The name is case-sensitive.'
+        : 'None got through, so the problem is not this variable — check the'
+          + ' deploy belongs to the project the variables were added to.',
+      '',
+      'On Vercel: Settings -> Environment Variables.',
+      '  - PRODUCTION must be ticked. A variable scoped only to Preview is',
+      '    invisible to a production build.',
+      '  - It must NOT be marked Sensitive. Sensitive variables are withheld',
+      '    from the build step, which is the only place Vite can read one.',
+      '  - Redeploy afterwards. Changing a variable never rebuilds on its own.',
+      '',
+      'Locally: put it in Frontend/.env.local and restart the dev server.',
+      '',
+    ].join('\n');
+
+    if (isDeploy) throw new Error(detail);
+
+    // Not a deploy — the artifact is a compile check and will be thrown away.
+    console.warn(
+      `\n[vite] WARNING — this bundle is not deployable.${detail}`
+        + 'Building anyway: this is not a deploy. Set DEPLOY_BUILD=1 to make it fatal.\n',
     );
   }
 
