@@ -143,8 +143,39 @@ same staff PIN.
 ## Upgrading an existing deployment
 
 The multi-tenant release changes the schema. Documents written before it have
-no `tenantId`, and every query filters on one — so old data is invisible rather
-than wrong, and no account can sign in, because admin passwords were removed.
+no `tenantId`, and every query filters on one — so the old data is invisible
+rather than wrong. The menu, tables, customers and order history are all still
+there and none of it renders.
 
-Back up anything worth keeping, drop the database, and onboard from scratch as
-above.
+Rather than rebuild a menu by hand, adopt the existing records into the
+restaurant you create:
+
+```bash
+# 1. Deploy, then sign in with Google and name the restaurant. It has to exist
+#    before anything can be adopted into it.
+
+# 2. Look first. Dry run is the default; nothing is written.
+MONGO_URI="<production uri>" npm --prefix Backend run adopt-legacy
+
+# 3. Apply.
+MONGO_URI="<production uri>" npm --prefix Backend run adopt-legacy -- --apply
+
+# 4. Rebuild the indexes, which also drops the old GLOBAL unique ones on
+#    pinLookup and email. Until this runs, two restaurants still cannot issue
+#    the same staff PIN.
+MONGO_URI="<production uri>" npm --prefix Backend run sync-indexes
+```
+
+`adopt-legacy` only touches documents with **no** `tenantId`, so it is safe to
+re-run and it leaves a part-way-through-onboarding account (`tenantId: null`)
+alone. With more than one restaurant it refuses to guess and asks for
+`--tenant=<slug>`.
+
+Two things it reports rather than changes:
+
+- A legacy admin holding only a password has no way in, since administrators
+  now sign in with Google. The row is left in place — it is the record of who
+  had access — so deactivate it from the Employees screen if it should not be
+  on the roster.
+- Staff accounts keep their existing PINs, which work again once a terminal is
+  linked. Set fresh ones from Employees if nobody remembers them.
