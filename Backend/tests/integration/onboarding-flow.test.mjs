@@ -42,6 +42,33 @@ const { runUnscoped, runInTenant } = await import('../../src/utils/tenantContext
 const { signAccessToken } = await import('../../src/utils/jwt.js');
 const { ROLES } = await import('../../src/constants/enums.js');
 
+/*
+ * ── Stubbing Google, and only Google ──────────────────────────────────────
+ * `verifyIdToken` makes a network call to fetch Google's signing keys and
+ * checks a real signature. That is Google's job, it needs live credentials no
+ * test can hold, and it is asserted separately below by confirming a forged
+ * credential is refused.
+ *
+ * Everything AFTER verification is ours — find-or-create, the onboarding
+ * branch, session issue — and it was previously untested over HTTP because
+ * this suite minted its own tokens and skipped the endpoint entirely. That gap
+ * hid a 500 on the very first Google sign-in.
+ *
+ * So the prototype method is replaced, and nothing else is.
+ */
+const { OAuth2Client } = await import('google-auth-library');
+const realVerify = OAuth2Client.prototype.verifyIdToken;
+
+/** Credentials this stub accepts, keyed by the string the client sends. */
+const googleIdentities = new Map();
+
+OAuth2Client.prototype.verifyIdToken = async function stubVerify({ idToken }) {
+  const identity = googleIdentities.get(idToken);
+  // Anything not registered behaves exactly as a forged token does.
+  if (!identity) throw new Error('Invalid token signature');
+  return { getPayload: () => identity };
+};
+
 const server = app.listen(0);
 await new Promise((r) => server.once('listening', r));
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -109,6 +136,64 @@ async function googleAccount(email, name) {
     }));
   return signAccessToken({ id: user._id, role: user.role, tokenVersion: 0, tenantId: null });
 }
+
+// ---------------------------------------------------------------------------
+section('signing in with Google for the very first time');
+// ---------------------------------------------------------------------------
+/*
+ * The real endpoint, with only Google's signature check stubbed. This is the
+ * first thing a new customer ever does, and it was reaching a 500: the handler
+ * writes a last-login timestamp, that write is tenant-scoped, and a brand-new
+ * account has no restaurant for it to be scoped by.
+ */
+googleIdentities.set('token-newcomer', {
+  sub: 'google-sub-newcomer',
+  email: 'newcomer@test.invalid',
+  email_verified: true,
+  name: 'Newcomer Owner',
+  given_name: 'Newcomer',
+  picture: 'https://example.invalid/a.png',
+});
+
+const firstSignIn = await call('POST', '/api/auth/google', {
+  body: { credential: 'token-newcomer' },
+});
+t('a brand-new Google account can sign in', firstSignIn.status === 200,
+  `status ${firstSignIn.status} ${JSON.stringify(firstSignIn.body?.error ?? '')}`);
+t('...and is told to name a restaurant', firstSignIn.body?.data?.onboarding?.required === true);
+t('...with a real session, not an error', typeof firstSignIn.body?.data?.accessToken === 'string');
+t('...and a suggested name from their Google profile',
+  firstSignIn.body?.data?.onboarding?.suggestedName === "Newcomer's Restaurant",
+  firstSignIn.body?.data?.onboarding?.suggestedName);
+
+/*
+ * Signing in again must find the SAME account rather than minting a second —
+ * googleId is globally unique, so a duplicate would be a hard failure.
+ */
+const secondSignIn = await call('POST', '/api/auth/google', {
+  body: { credential: 'token-newcomer' },
+});
+t('signing in again returns the same account', secondSignIn.status === 200,
+  `status ${secondSignIn.status}`);
+t('...and does not create a duplicate',
+  secondSignIn.body?.data?.user?.id === firstSignIn.body?.data?.user?.id);
+
+/*
+ * An unverified address is refused. Google says whether it verified the
+ * mailbox; we decide whether that is good enough, because email is how a
+ * person is recognised.
+ */
+googleIdentities.set('token-unverified', {
+  sub: 'google-sub-unverified',
+  email: 'unverified@test.invalid',
+  email_verified: false,
+  name: 'Unverified',
+});
+const unverified = await call('POST', '/api/auth/google', {
+  body: { credential: 'token-unverified' },
+});
+t('an unverified Google email is refused', unverified.status === 401,
+  `status ${unverified.status}`);
 
 // ---------------------------------------------------------------------------
 section('a session with no restaurant can reach almost nothing');
@@ -269,6 +354,7 @@ t('a forged credential is rejected', badToken.status === 401, `status ${badToken
 t('...with the generic message, revealing nothing',
   badToken.body?.error?.message === 'Invalid credentials', badToken.body?.error?.message);
 
+OAuth2Client.prototype.verifyIdToken = realVerify;
 await new Promise((r) => server.close(r));
 await wipe();
 await disconnect();
