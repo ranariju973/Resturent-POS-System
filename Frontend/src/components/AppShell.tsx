@@ -2,7 +2,7 @@ import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../icons/Icon';
 import { NAV } from '../data/seed';
 import type { NavEntry } from '../data/types';
-import { CONFIG, usePos } from '../store';
+import { usePos } from '../store';
 import { canViewScreen } from '../lib/permissions';
 import { useIsMobile } from '../lib/useViewport';
 import { CARD_SHADOW } from './ui';
@@ -106,7 +106,7 @@ function DesktopShell({ children }: { children: ReactNode }) {
               }}
             >
               <span style={{ fontSize: 17, fontWeight: 700, color: '#006241' }}>
-                {CONFIG.restaurantName}
+                {state.restaurant?.name ?? 'Restaurant POS'}
               </span>
               <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(0,0,0,0.45)' }}>
                 Point of Sale
@@ -489,7 +489,7 @@ function MobileShell({ children }: { children: ReactNode }) {
               textOverflow: 'ellipsis',
             }}
           >
-            {CONFIG.restaurantName}
+            {state.restaurant?.name ?? 'Restaurant POS'}
           </span>
           {/* The role, not the screen name — the screen is obvious from the
               highlighted tab, but who is signed in at a shared till is not. */}

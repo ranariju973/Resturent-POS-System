@@ -3,6 +3,8 @@ import { AppShell } from './components/AppShell';
 import { Toast } from './components/Toast';
 import { Billing } from './screens/Billing';
 import { Login } from './screens/Login';
+import { Onboarding } from './screens/Onboarding';
+import { TerminalSetup } from './components/TerminalSetup';
 import { usePos } from './store';
 import { canViewScreen } from './lib/permissions';
 import { motion, AnimatePresence, screenFade } from './components/motion';
@@ -106,13 +108,23 @@ export function App() {
    * lands in that screen's error state, which is the correct outcome.
    */
   const userId = state.user?.id ?? null;
+  /*
+   * Gated on the RESTAURANT, not just the session.
+   *
+   * A Google account part-way through onboarding has a real session and no
+   * restaurant, and every one of these calls would fail — the server refuses
+   * any scoped query without one. Waiting until the restaurant exists means
+   * the onboarding screen is quiet rather than firing three requests that
+   * cannot succeed.
+   */
+  const tenantId = state.restaurant?.id ?? null;
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !tenantId) return;
     void actions.loadMenu();
     void actions.loadTables();
     void actions.loadBoard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [userId, tenantId]);
 
   /*
    * `100dvh`, not `100vh`: on mobile Safari and Chrome the URL bar counts
@@ -133,6 +145,13 @@ export function App() {
     >
       {state.authBooting ? (
         <Splash />
+      ) : state.onboarding ? (
+        /*
+         * Before the shell, deliberately. There is no restaurant yet, so a nav
+         * rendered around this would offer screens that cannot load — and the
+         * server would refuse them anyway.
+         */
+        <Onboarding />
       ) : state.user ? (
         <AppShell>
           {/*
@@ -166,6 +185,12 @@ export function App() {
       ) : (
         <Login />
       )}
+      {/*
+        Outside the shell so it is reachable from the login screen too — an
+        administrator who has just signed in on an unlinked machine is standing
+        exactly where the linking has to happen.
+      */}
+      <TerminalSetup />
       <Toast />
     </div>
   );

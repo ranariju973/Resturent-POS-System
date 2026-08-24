@@ -27,6 +27,31 @@ export interface ApiUser {
   dashboardScope: 'full' | 'limited' | null;
 }
 
+/** The restaurant a session belongs to. Null before onboarding names one. */
+export interface Restaurant {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+/** The terminal this browser is linked to, when it is. */
+export interface Terminal {
+  name: string;
+}
+
+/**
+ * Returned when a Google account has signed in but belongs to no restaurant.
+ *
+ * Not an error: the session is real, it simply cannot reach anything until a
+ * restaurant exists. The server enforces that — such a token can only reach
+ * GET /auth/me and POST /tenants — so this flag decides which SCREEN to
+ * render, never whether the app is allowed to.
+ */
+export interface Onboarding {
+  required: boolean;
+  suggestedName?: string;
+}
+
 /** The app's Staff shape, plus the id, role and permissions the API needs. */
 export interface SessionUser extends Staff {
   id: string;
@@ -69,24 +94,57 @@ export function toSessionUser(user: ApiUser): SessionUser {
 interface LoginResponse {
   accessToken: string;
   user: ApiUser;
+  restaurant?: Restaurant | null;
+  terminal?: Terminal | null;
+  onboarding?: { required: boolean; suggestedName?: string } | null;
 }
 
-/** Admin — email + password. */
-export async function loginAdmin(email: string, password: string): Promise<SessionUser> {
-  const data = await api<LoginResponse>('/api/auth/login/admin', {
+/** What a completed sign-in gives the app. */
+export interface Session {
+  user: SessionUser;
+  restaurant: Restaurant | null;
+  terminal: Terminal | null;
+  /** Non-null only when the account has no restaurant yet. */
+  onboarding: Onboarding | null;
+}
+
+const toSession = (data: LoginResponse): Session => ({
+  user: toSessionUser(data.user),
+  restaurant: data.restaurant ?? null,
+  terminal: data.terminal ?? null,
+  onboarding: data.onboarding?.required
+    ? { required: true, suggestedName: data.onboarding.suggestedName }
+    : null,
+});
+
+/**
+ * Owners and administrators — a Google ID token.
+ *
+ * May return a session with `onboarding` set and no restaurant. That is a
+ * successful sign-in, not a failure: the account exists and is authenticated,
+ * it just has not named a restaurant yet.
+ */
+export async function loginGoogle(credential: string): Promise<Session> {
+  const data = await api<LoginResponse>('/api/auth/google', {
     method: 'POST',
-    body: { email, password },
-    // A 401 here means "wrong credentials", not "expired token" — retrying
-    // through a refresh would be meaningless.
+    body: { credential },
+    // A 401 here means the token was rejected, not that ours expired —
+    // retrying through a refresh would be meaningless.
     skipRetry: true,
   });
 
   setAccessToken(data.accessToken);
-  return toSessionUser(data.user);
+  return toSession(data);
 }
 
-/** Cashier / kitchen staff — PIN. */
-export async function loginStaff(pin: string): Promise<SessionUser> {
+/**
+ * Cashier / kitchen staff — PIN.
+ *
+ * The restaurant is not sent: it comes from the terminal's device cookie,
+ * which rides along automatically. A PIN alone would be ambiguous, since two
+ * restaurants can both issue 1234.
+ */
+export async function loginStaff(pin: string): Promise<Session> {
   const data = await api<LoginResponse>('/api/auth/login/staff', {
     method: 'POST',
     body: { pin },
@@ -94,7 +152,59 @@ export async function loginStaff(pin: string): Promise<SessionUser> {
   });
 
   setAccessToken(data.accessToken);
-  return toSessionUser(data.user);
+  return toSession(data);
+}
+
+/**
+ * Name a restaurant and become its administrator.
+ *
+ * The server revokes the pre-onboarding token and issues a fresh one, so the
+ * new access token must replace the old — the previous one stops working the
+ * moment this returns.
+ */
+export async function createRestaurant(name: string): Promise<Session> {
+  const data = await api<LoginResponse>('/api/tenants', {
+    method: 'POST',
+    body: { name },
+    skipRetry: true,
+  });
+
+  setAccessToken(data.accessToken);
+  return toSession(data);
+}
+
+/** What restaurant this browser's terminal belongs to. Read before any sign-in. */
+export interface TerminalInfo {
+  linked: boolean;
+  restaurant: { name: string; slug: string } | null;
+  terminal: Terminal | null;
+}
+
+/**
+ * Ask, before anyone signs in, which restaurant this terminal is linked to.
+ *
+ * Unauthenticated by design — the login screen has no session yet, and a
+ * keypad that cannot name its restaurant gives a cashier no way to notice they
+ * are standing at the wrong one. Never throws: an unreachable server is
+ * reported as "not linked", which is the state whose screen tells someone what
+ * to do about it.
+ */
+export async function fetchTerminalInfo(): Promise<TerminalInfo> {
+  try {
+    return await api<TerminalInfo>('/api/auth/terminal', { skipRetry: true });
+  } catch {
+    return { linked: false, restaurant: null, terminal: null };
+  }
+}
+
+/** Link THIS browser to the signed-in administrator's restaurant. */
+export async function linkTerminal(name: string): Promise<Terminal> {
+  const data = await api<{ terminal: Terminal }>('/api/devices', {
+    method: 'POST',
+    body: { name },
+    skipRetry: true,
+  });
+  return data.terminal;
 }
 
 /**
@@ -102,13 +212,13 @@ export async function loginStaff(pin: string): Promise<SessionUser> {
  * Returns null when there is no valid session — the normal case for a first
  * visit, so it must not surface as an error.
  */
-export async function restoreSession(): Promise<SessionUser | null> {
+export async function restoreSession(): Promise<Session | null> {
   const ok = await refreshSession();
   if (!ok) return null;
 
   try {
-    const data = await api<{ user: ApiUser }>('/api/auth/me', { skipRetry: true });
-    return toSessionUser(data.user);
+    const data = await api<LoginResponse>('/api/auth/me', { skipRetry: true });
+    return toSession(data);
   } catch {
     return null;
   }
@@ -146,10 +256,24 @@ export function loginErrorMessage(err: unknown, fallback: string): string {
 
   if (err.status === 0) return 'Cannot reach the server. Check your connection.';
   if (err.isRateLimited) return 'Too many attempts. Wait a few minutes and try again.';
+  if (isTerminalNotLinked(err)) return 'This terminal is not set up yet.';
   if (err.status === 400 && err.details?.length) return err.details[0].message;
   if (err.isAuthError) return fallback;
 
   return err.message || fallback;
+}
+
+/**
+ * Is this the "terminal was never linked" answer?
+ *
+ * The server deliberately makes this one distinguishable from every other
+ * login failure, because it is not a credential failure: it says only that
+ * THIS browser holds no device cookie, which the browser already knows. The
+ * client needs to tell them apart to show the setup screen rather than a red
+ * "wrong PIN" under the keypad.
+ */
+export function isTerminalNotLinked(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'TERMINAL_NOT_LINKED';
 }
 
 export { ApiError };

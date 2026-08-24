@@ -243,7 +243,16 @@ orderSchema.index({ tenantId: 1, createdBy: 1, createdAt: -1 });
  * deployment costs nothing and collisions are not a practical concern. The
  * controller re-enters the resolved tenant immediately afterwards.
  */
-orderSchema.index({ invoiceTokenHash: 1 }, { unique: true, sparse: true });
+orderSchema.index(
+  { invoiceTokenHash: 1 },
+  {
+    unique: true,
+    // Partial, not sparse: an order that has not been paid carries an explicit
+    // null here, and `sparse` only skips a field that is absent — so every
+    // unpaid order would otherwise collide with every other unpaid order.
+    partialFilterExpression: { invoiceTokenHash: { $type: 'string' } },
+  },
+);
 
 /**
  * Recompute every monetary field from the line items.

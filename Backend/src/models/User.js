@@ -111,7 +111,19 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
       maxlength: 255,
-      index: { unique: true, sparse: true },
+      /*
+       * A PARTIAL index, not a sparse one.
+       *
+       * `sparse` skips a document only when the field is genuinely ABSENT — an
+       * explicit `googleId: null` still occupies the index, so two PIN staff
+       * written with that field set to null would collide on a duplicate key.
+       * A partial index conditions on the type instead, which is true only for
+       * an account that really has a Google identity.
+       */
+      index: {
+        unique: true,
+        partialFilterExpression: { googleId: { $type: 'string' } },
+      },
     },
 
     /**

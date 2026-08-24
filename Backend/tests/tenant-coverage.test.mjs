@@ -162,13 +162,58 @@ for (const [file, src] of bulkWriteCallers) {
     'Mongoose runs no middleware here — the filter must be explicit');
 }
 
+/** Every .js under src/, collected once and reused by the checks below. */
+function srcFilesForCacheAudit() {
+  const out = [];
+  const walkDir = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walkDir(full);
+      else if (entry.name.endsWith('.js')) out.push(full);
+    }
+  };
+  walkDir(path.join(ROOT, 'src'));
+  return out;
+}
+
+console.log('\n--- no cache key is frozen at import time ---');
+/*
+ * The bug this catches, because it actually happened: menuCache declared
+ *
+ *     export const MENU_ITEMS_KEY = key('menu', 'items');
+ *
+ * at module scope. `key()` reads the restaurant from the ambient request
+ * context, and at import time there is none — so every restaurant shared one
+ * key computed before any request existed. The first menu read on the
+ * deployment populated it and every other restaurant was served that menu
+ * until the TTL expired. The integration suite caught it as Beta being handed
+ * Alpha's categories.
+ *
+ * A cache key must therefore be built per request, which means `key()` may
+ * only be called inside a function.
+ */
+const cacheKeyOffenders = [];
+for (const file of srcFilesForCacheAudit()) {
+  const src = fs.readFileSync(file, 'utf8');
+  for (const line of src.split('\n')) {
+    // A top-level const/let/var assigned directly from key(...) — no leading
+    // indentation, so it cannot be inside a function body.
+    if (/^(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*key\(/.test(line)) {
+      cacheKeyOffenders.push(`${path.relative(ROOT, file)}: ${line.trim()}`);
+    }
+  }
+}
+for (const o of cacheKeyOffenders) console.log(`     ${o}`);
+t('no cache key is computed at module scope', cacheKeyOffenders.length === 0,
+  'build it inside a function so it picks up the request\'s restaurant');
+
 console.log('\n--- cross-tenant reads are few, and each says why ---');
 /*
  * runUnscoped disables tenant filtering. Every call is a place where a bug
  * becomes a leak between customers, so the count is asserted: adding one means
  * changing this number, which shows up in review.
  */
-const MAX_UNSCOPED_CALLS = 8;
+const MAX_UNSCOPED_CALLS = 9;
 const srcFiles = [];
 const walk = (dir) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

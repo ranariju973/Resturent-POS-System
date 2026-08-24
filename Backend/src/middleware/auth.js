@@ -22,7 +22,7 @@ import { verifyAccessToken } from '../utils/jwt.js';
 import { ApiError } from '../utils/apiResponse.js';
 import { User } from '../models/User.js';
 import { logger } from '../utils/logger.js';
-import { runInTenant } from '../utils/tenantContext.js';
+import { runInTenant, runUnscoped } from '../utils/tenantContext.js';
 import { rememberUser } from '../utils/userCache.js';
 
 /**
@@ -48,9 +48,22 @@ import { rememberUser } from '../utils/userCache.js';
  */
 function loadUser(id) {
   return rememberUser(id, () =>
-    User.findById(id)
-      .select('_id name role isActive tokenVersion email avatarUrl lastLoginAt tenantId')
-      .lean(),
+    /*
+     * ── Unscoped, necessarily ────────────────────────────────────────────────
+     * This is the chicken and egg at the centre of multi-tenant auth: the
+     * request's restaurant is a property of the USER, so the user has to be
+     * loaded before there is any restaurant to scope the load by.
+     *
+     * Safe, because the lookup is by `_id` — a globally unique ObjectId taken
+     * from a signed token, not from anything a client composed. It can return
+     * exactly one row, the one the token names. Everything after this point
+     * runs inside that user's restaurant (see requireAuth below), so this is
+     * the last unscoped read of the request.
+     */
+    runUnscoped('requireAuth: token subject -> account (the tenant lives on it)', async () =>
+      User.findById(id)
+        .select('_id name role isActive tokenVersion email avatarUrl lastLoginAt tenantId')
+        .lean()),
   );
 }
 

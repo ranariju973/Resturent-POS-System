@@ -1,13 +1,23 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../icons/Icon';
 import { CONFIG, usePos } from '../store';
-import { CARD_SHADOW, ErrorLine, Field, bareInput } from '../components/ui';
+import { CARD_SHADOW, ErrorLine } from '../components/ui';
+import { GoogleButton } from '../components/GoogleButton';
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'clear', '0', 'back'];
 
 export function Login() {
   const { state, actions } = usePos();
-  const pinMode = state.mode === 'pin';
+
+  /*
+   * An unlinked terminal cannot take a PIN at all.
+   *
+   * The server has no way to know which restaurant four digits belong to
+   * without this machine's device cookie, so offering the keypad would be
+   * offering a door that cannot open. The tabs disappear and only Google
+   * sign-in is shown, which is what an owner needs to set the terminal up.
+   */
+  const pinMode = state.terminalLinked && state.mode === 'pin';
   const matched = state.match;
   const shakeAnim = state.shaking ? 'shake 0.4s cubic-bezier(0.36,0.07,0.19,0.97) 1' : 'none';
 
@@ -52,30 +62,42 @@ export function Login() {
           >
             <Icon icon="lucide:coffee" size={26} />
           </span>
+          {/*
+            * The restaurant this TERMINAL belongs to, read before anyone signs
+            * in. A keypad that cannot name its restaurant gives a cashier no
+            * way to notice they are standing at the wrong one.
+            */}
           <span style={{ fontSize: 21, fontWeight: 700, color: '#006241', lineHeight: 1.2 }}>
-            {CONFIG.restaurantName}
+            {state.restaurant?.name ?? 'Restaurant POS'}
           </span>
           <span style={{ fontSize: 13, fontWeight: 500, color: 'rgba(0,0,0,0.58)' }}>
-            {CONFIG.terminalLabel}
+            {state.terminalLinked
+              ? (state.terminal?.name ?? 'Terminal')
+              : 'This terminal is not set up yet'}
           </span>
         </div>
 
-        <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 50, background: '#f2f0eb' }}>
-          <TabButton
-            active={pinMode}
-            icon="lucide:grid-2x2"
-            label="PIN"
-            onClick={() => actions.patch({ mode: 'pin', loginError: '' })}
-          />
-          <TabButton
-            active={!pinMode}
-            icon="lucide:key-round"
-            label="Admin password"
-            onClick={() =>
-              actions.patch({ mode: 'password', loginError: '', pin: '', match: null })
-            }
-          />
-        </div>
+        {/* Hidden entirely while unlinked: there is only one usable door. */}
+        {state.terminalLinked ? (
+          <div
+            style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 50, background: '#f2f0eb' }}
+          >
+            <TabButton
+              active={pinMode}
+              icon="lucide:grid-2x2"
+              label="Staff PIN"
+              onClick={() => actions.patch({ mode: 'pin', loginError: '' })}
+            />
+            <TabButton
+              active={!pinMode}
+              icon="lucide:user-round"
+              label="Owner"
+              onClick={() =>
+                actions.patch({ mode: 'google', loginError: '', pin: '', match: null })
+              }
+            />
+          </div>
+        ) : null}
 
         {pinMode ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -210,55 +232,43 @@ export function Login() {
             )}
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 2 }}>
-            <div
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 2 }}>
+            <p
               style={{
-                animation: shakeAnim,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 12,
+                margin: 0,
+                fontSize: 13,
+                fontWeight: 500,
+                color: 'rgba(0,0,0,0.58)',
+                textAlign: 'center',
+                lineHeight: 1.55,
               }}
             >
-              <Field label="Work email" htmlFor="email">
-                <input
-                  id="email"
-                  type="email"
-                  placeholder="admin@cafe.com"
-                  value={state.email}
-                  onChange={(e) => actions.patch({ email: e.target.value, loginError: '' })}
-                  style={bareInput}
-                />
-              </Field>
-              <Field label="Password" htmlFor="pw">
-                <input
-                  id="pw"
-                  type="password"
-                  placeholder="••••••••"
-                  value={state.password}
-                  onChange={(e) => actions.patch({ password: e.target.value, loginError: '' })}
-                  style={bareInput}
-                />
-              </Field>
+              {state.terminalLinked
+                ? 'Owners and managers sign in with Google.'
+                : 'An owner needs to sign in once to link this terminal. After that, staff can use their PIN.'}
+            </p>
+
+            <div style={{ animation: shakeAnim }}>
+              <GoogleButton
+                disabled={state.authPending}
+                onCredential={(credential) => void actions.signInWithGoogle(credential)}
+              />
             </div>
 
-            {state.loginError ? <ErrorLine message={state.loginError} /> : null}
+            {state.authPending ? (
+              <span
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: 'rgba(0,0,0,0.58)',
+                  textAlign: 'center',
+                }}
+              >
+                Signing in&hellip;
+              </span>
+            ) : null}
 
-            <button
-              type="button"
-              className="press hv-primary"
-              disabled={state.authPending}
-              onClick={() => void actions.signIn()}
-              style={{
-                ...confirmButton,
-                display: 'block',
-                ...(state.authPending ? { opacity: 0.6, cursor: 'default' } : null),
-              }}
-            >
-              {state.authPending ? 'Signing in…' : 'Sign In'}
-            </button>
-            <a href="#forgot" style={{ alignSelf: 'center', fontSize: 13, fontWeight: 600 }}>
-              Forgot password?
-            </a>
+            {state.loginError ? <ErrorLine message={state.loginError} /> : null}
           </div>
         )}
       </div>
@@ -271,13 +281,13 @@ export function Login() {
             fontWeight: 500,
             color: 'rgba(0,0,0,0.45)',
             textAlign: 'center',
+            maxWidth: 380,
+            lineHeight: 1.6,
           }}
         >
-          {/* The old hint printed working PINs. Credentials now come from the
-              backend seed (`npm run seed -- --demo`), which generates them
-              randomly and prints them once — so there is nothing to hard-code
-              here, which is the point. */}
-          Sign in with your staff PIN, or use the Admin tab
+          {state.terminalLinked
+            ? 'Staff sign in with the PIN their manager set. Owners use the Owner tab.'
+            : 'Only an owner can link a terminal, and it only has to be done once.'}
         </p>
       ) : null}
     </div>

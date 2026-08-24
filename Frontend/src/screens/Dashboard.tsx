@@ -1,6 +1,6 @@
 import { useEffect, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../icons/Icon';
-import { CONFIG, usePos } from '../store';
+import { usePos } from '../store';
 import { clockTime, money, plural } from '../lib/format';
 import { useIsMobile } from '../lib/useViewport';
 import { CARD_SHADOW, LoadState, StatusBadge, card, tableHeaderCell } from '../components/ui';
@@ -56,7 +56,7 @@ export function Dashboard() {
     >
       <div>
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: '#006241', lineHeight: 1.2 }}>
-          Today at {CONFIG.restaurantName}
+          Today at {state.restaurant?.name ?? 'your restaurant'}
         </h1>
         <p style={{ margin: '6px 0 0', fontSize: 14, fontWeight: 500, color: 'rgba(0,0,0,0.58)' }}>
           Live snapshot of the current service

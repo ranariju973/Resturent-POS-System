@@ -32,8 +32,20 @@ import { key, del, remember } from './cache.js';
 
 const TTL_MS = 5 * 60_000;
 
-export const MENU_ITEMS_KEY = key('menu', 'items');
-export const MENU_CATEGORIES_KEY = key('menu', 'categories');
+/*
+ * ── Functions, not constants ───────────────────────────────────────────────
+ * These were `const MENU_ITEMS_KEY = key('menu', 'items')`, evaluated once at
+ * import. Once cache keys carried the restaurant, that meant every restaurant
+ * shared one key computed before any request existed — so the first menu read
+ * on the deployment populated it and every other restaurant was served that
+ * menu until the TTL expired.
+ *
+ * The integration suite caught it: Beta asked for its categories and was
+ * handed Alpha's. Called per request, `key()` reads the tenant from the
+ * ambient context and each restaurant gets its own entry.
+ */
+export const menuItemsKey = () => key('menu', 'items');
+export const menuCategoriesKey = () => key('menu', 'categories');
 
 /** True when a request asked for the plain, whole, live menu. */
 export function isCacheableItemQuery(query) {
@@ -45,8 +57,8 @@ export function isCacheableItemQuery(query) {
   );
 }
 
-export const rememberItems = (compute) => remember(MENU_ITEMS_KEY, TTL_MS, compute);
-export const rememberCategories = (compute) => remember(MENU_CATEGORIES_KEY, TTL_MS, compute);
+export const rememberItems = (compute) => remember(menuItemsKey(), TTL_MS, compute);
+export const rememberCategories = (compute) => remember(menuCategoriesKey(), TTL_MS, compute);
 
 /**
  * Called by every menu and category writer.
@@ -56,7 +68,7 @@ export const rememberCategories = (compute) => remember(MENU_CATEGORIES_KEY, TTL
  * only the one that "obviously" changed is how counts drift.
  */
 export async function invalidateMenu() {
-  await Promise.all([del(MENU_ITEMS_KEY), del(MENU_CATEGORIES_KEY)]);
+  await Promise.all([del(menuItemsKey()), del(menuCategoriesKey())]);
 }
 
 export default { rememberItems, rememberCategories, invalidateMenu, isCacheableItemQuery };

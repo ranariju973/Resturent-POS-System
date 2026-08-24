@@ -14,8 +14,8 @@ import {
   isCacheableItemQuery,
   invalidateMenu,
   rememberItems,
-  MENU_ITEMS_KEY,
-  MENU_CATEGORIES_KEY,
+  menuItemsKey,
+  menuCategoriesKey,
 } from '../src/utils/menuCache.js';
 import { rememberUser, invalidateUsers } from '../src/utils/userCache.js';
 
@@ -148,22 +148,22 @@ console.log('\n--- only the till\'s plain menu read is cacheable ---');
 console.log('\n--- invalidateMenu drops both halves ---');
 {
   cache.clearAll();
-  await cache.set(MENU_ITEMS_KEY, ['item'], 60_000);
-  await cache.set(MENU_CATEGORIES_KEY, ['cat'], 60_000);
+  await cache.set(menuItemsKey(), ['item'], 60_000);
+  await cache.set(menuCategoriesKey(), ['cat'], 60_000);
 
   await invalidateMenu();
 
-  t('items are dropped', (await cache.get(MENU_ITEMS_KEY)) === null);
+  t('items are dropped', (await cache.get(menuItemsKey())) === null);
   // Categories carry per-category item counts, so an item write changes the
   // categories payload too. Dropping only the "obvious" one is how counts drift.
-  t('categories are dropped with them', (await cache.get(MENU_CATEGORIES_KEY)) === null);
+  t('categories are dropped with them', (await cache.get(menuCategoriesKey())) === null);
 }
 
 console.log('\n--- rememberItems uses the shared key ---');
 {
   cache.clearAll();
   await rememberItems(async () => ({ items: [], count: 0 }));
-  t('it wrote to the key invalidateMenu clears', (await cache.get(MENU_ITEMS_KEY)) !== null);
+  t('it wrote to the key invalidateMenu clears', (await cache.get(menuItemsKey())) !== null);
 }
 
 console.log('\n--- invalidateUsers clears every session, not one ---');

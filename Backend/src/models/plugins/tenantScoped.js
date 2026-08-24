@@ -232,9 +232,47 @@ export function tenantScoped(schema, { required = true, unique = [] } = {}) {
    * Prefixed with tenantId so uniqueness is per-restaurant. The prefix also
    * makes each index usable by the filter this plugin injects, which a
    * suffixed one would not be.
+   *
+   * ── Why `sparse` is translated into `partialFilterExpression` ────────────
+   * This is a trap worth spelling out, because it produced a bug that let
+   * exactly ONE person sign up with Google and then refused everybody else.
+   *
+   * On a COMPOUND index, `sparse: true` skips a document only when EVERY
+   * indexed field is absent. Once tenantId is prepended, that condition can
+   * essentially never hold — tenantId is always present — so `sparse` stops
+   * doing anything at all. Worse, an explicit `null` counts as a value: two
+   * accounts with `{tenantId: null, pinLookup: null}` are a duplicate key,
+   * even though neither has a PIN.
+   *
+   * A partial index says what was actually meant: index a document only when
+   * the field genuinely exists. Two admins with no PIN are then not in the
+   * index at all, and cannot collide.
    */
   for (const { fields, options = {} } of unique) {
-    schema.index({ tenantId: 1, ...fields }, { ...options, unique: true });
+    const { sparse, ...rest } = options;
+    const indexOptions = { ...rest, unique: true };
+
+    if (sparse) {
+      const names = Object.keys(fields);
+      if (names.length !== 1) {
+        throw new Error(
+          'tenantScoped: sparse is only translated for a single-field unique index. '
+            + `Got {${names.join(', ')}} — write an explicit partialFilterExpression instead.`,
+        );
+      }
+
+      /*
+       * Merged, not replaced: Category and MenuItem already pass a
+       * partialFilterExpression of their own ({isActive: true}), and silently
+       * dropping it would make a soft-deleted row keep its name reserved.
+       */
+      indexOptions.partialFilterExpression = {
+        ...(rest.partialFilterExpression ?? {}),
+        [names[0]]: { $type: 'string' },
+      };
+    }
+
+    schema.index({ tenantId: 1, ...fields }, indexOptions);
   }
 }
 
