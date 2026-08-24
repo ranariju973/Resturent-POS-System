@@ -12,10 +12,11 @@
  * different document.
  */
 import mongoose from 'mongoose';
+import { requireTenantId } from '../utils/tenantContext.js';
 
 const counterSchema = new mongoose.Schema(
   {
-    // e.g. 'order:2026-08-04' or 'ticket:2026-08-04'
+    // e.g. 'order:66b1f2...:2026-08-04' — name, restaurant, service day.
     _id: { type: String, required: true },
     seq: { type: Number, default: 0 },
   },
@@ -73,7 +74,22 @@ export async function nextSequence(name, options = {}) {
 export async function nextSequenceWithDay(name, { daily = true, start = 1, session } = {}) {
   // Read once. Everything below uses this value, never a fresh clock read.
   const day = serviceDayKey();
-  const key = daily ? `${name}:${day}` : name;
+
+  /*
+   * The restaurant is part of the key, so each one counts independently.
+   *
+   * Without it every restaurant on the deployment would draw from one
+   * sequence: the second venue to open a bill on a given day would call out
+   * "order 47" for its first order of the morning, and the numbers staff read
+   * to each other across a counter would have gaps wherever another business
+   * happened to be busy.
+   *
+   * Taken from the ambient context rather than a parameter so that no call
+   * site changed — and required rather than optional, because a sequence with
+   * no restaurant would silently merge two businesses' invoice numbering.
+   */
+  const tenantId = requireTenantId('nextSequence');
+  const key = daily ? `${name}:${tenantId}:${day}` : `${name}:${tenantId}`;
 
   const doc = await Counter.findByIdAndUpdate(
     key,

@@ -53,6 +53,36 @@ const schema = z
       .string()
       .min(32, 'INVOICE_TOKEN_PEPPER must be at least 32 characters'),
 
+    /**
+     * Peppers the terminal device-binding token hash (see src/models/Device.js).
+     *
+     * A terminal proves WHICH RESTAURANT it belongs to with this token, which
+     * is what keeps one restaurant's staff PINs from ever being matched
+     * against another's. Rotating it un-links every terminal — each needs an
+     * owner to link it again — so treat it as permanent once terminals exist.
+     */
+    DEVICE_TOKEN_PEPPER: z
+      .string()
+      .min(32, 'DEVICE_TOKEN_PEPPER must be at least 32 characters'),
+
+    /**
+     * Google OAuth 2.0 Web client ID — the audience every admin ID token is
+     * verified against.
+     *
+     * Public by design: it is embedded in the frontend page. The client SECRET
+     * is deliberately absent — ID tokens are verified against Google's
+     * published keys, so this flow never needs it, and not storing a secret is
+     * one fewer thing that can leak.
+     */
+    GOOGLE_CLIENT_ID: z
+      .string()
+      .min(1, 'GOOGLE_CLIENT_ID is required')
+      .refine(
+        (v) => v.endsWith('.apps.googleusercontent.com'),
+        'GOOGLE_CLIENT_ID must end with .apps.googleusercontent.com — that is the '
+          + 'Web client ID from the Google console, not the client secret or project id',
+      ),
+
     CORS_ORIGIN: z.string().min(1, 'CORS_ORIGIN is required'),
 
     /**
@@ -77,28 +107,42 @@ const schema = z
 
     LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
   })
-  // The two token secrets signing with the same key would let a refresh token
-  // be replayed as an access token.
-  .refine((e) => e.JWT_ACCESS_SECRET !== e.JWT_REFRESH_SECRET, {
-    message: 'JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different values',
-    path: ['JWT_REFRESH_SECRET'],
-  })
-  .refine((e) => e.PIN_PEPPER !== e.JWT_ACCESS_SECRET && e.PIN_PEPPER !== e.JWT_REFRESH_SECRET, {
-    message: 'PIN_PEPPER must be different from the JWT secrets',
-    path: ['PIN_PEPPER'],
-  })
-  // Same reasoning as the PIN pepper: one leaked secret must not compromise a
-  // second, unrelated hash.
-  .refine(
-    (e) =>
-      e.INVOICE_TOKEN_PEPPER !== e.PIN_PEPPER &&
-      e.INVOICE_TOKEN_PEPPER !== e.JWT_ACCESS_SECRET &&
-      e.INVOICE_TOKEN_PEPPER !== e.JWT_REFRESH_SECRET,
-    {
-      message: 'INVOICE_TOKEN_PEPPER must be different from PIN_PEPPER and the JWT secrets',
-      path: ['INVOICE_TOKEN_PEPPER'],
-    },
-  );
+  /*
+   * Every secret must be a DIFFERENT value from every other.
+   *
+   * Two reasons, and they are separate. Reusing one key across the access and
+   * refresh signatures would let a refresh token be replayed as an access
+   * token. Reusing one across a signature and a hash pepper means a single
+   * leak compromises two unrelated things at once.
+   *
+   * Written as an all-pairs sweep rather than a chain of hand-written
+   * comparisons: pairwise refinements grow quadratically, and the fourth
+   * secret is exactly where someone adds three of the four checks and the
+   * missing one goes unnoticed. Adding a secret here is now a one-line edit
+   * that cannot be half-done.
+   */
+  .superRefine((e, ctx) => {
+    const secrets = [
+      'JWT_ACCESS_SECRET',
+      'JWT_REFRESH_SECRET',
+      'PIN_PEPPER',
+      'INVOICE_TOKEN_PEPPER',
+      'DEVICE_TOKEN_PEPPER',
+    ];
+
+    for (let i = 0; i < secrets.length; i += 1) {
+      for (let j = i + 1; j < secrets.length; j += 1) {
+        if (e[secrets[i]] && e[secrets[i]] === e[secrets[j]]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `${secrets[j]} must be a different value from ${secrets[i]} — `
+              + 'one leaked secret must not compromise a second, unrelated use',
+            path: [secrets[j]],
+          });
+        }
+      }
+    }
+  });
 
 const parsed = schema.safeParse(process.env);
 

@@ -225,7 +225,7 @@ export function MenuManagement() {
                         danger
                         onClick={(e) => {
                           e.stopPropagation();
-                          actions.openDeleteModal('cat', cat.name);
+                          actions.openDeleteModal('cat', cat.id);
                         }}
                       />
                     </span>

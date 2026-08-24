@@ -101,7 +101,7 @@ try {
     evil.headers.get('access-control-allow-origin') === null,
     `got ${evil.headers.get('access-control-allow-origin')}`);
 
-  const preflight = await fetch(`${base}/api/auth/login/admin`, {
+  const preflight = await fetch(`${base}/api/auth/login/staff`, {
     method: 'OPTIONS',
     headers: {
       Origin: 'https://evil.example',
@@ -113,14 +113,14 @@ try {
 
   // -------------------------------------------------------------------------
   console.log('\n--- body size limit ---');
-  const huge = await postJson('/api/auth/login/admin', { email: 'a@b.co', password: 'x'.repeat(50_000) });
+  const huge = await postJson('/api/auth/login/staff', { pin: 'x'.repeat(50_000) });
   t('oversized body rejected with 413', huge.status === 413, `status ${huge.status}`);
   const hugeBody = await huge.json();
   t('rejection is a clean envelope', hugeBody.success === false && Boolean(hugeBody.error?.message));
 
   // -------------------------------------------------------------------------
   console.log('\n--- malformed input ---');
-  const badJson = await postJson('/api/auth/login/admin', '{not valid json');
+  const badJson = await postJson('/api/auth/login/staff', '{not valid json');
   t('malformed JSON is a 400, not a 500', badJson.status === 400, `status ${badJson.status}`);
   const badJsonBody = await badJson.json();
   t('no parser internals leaked', !JSON.stringify(badJsonBody).toLowerCase().includes('json.parse'));
@@ -128,7 +128,7 @@ try {
   // -------------------------------------------------------------------------
   console.log('\n--- NoSQL injection ---');
   // The classic auth bypass: operators instead of values.
-  const injected = await postJson('/api/auth/login/admin', {
+  const injected = await postJson('/api/auth/login/staff', {
     email: { $ne: null },
     password: { $ne: null },
   });
@@ -144,7 +144,7 @@ try {
     injectedQuery.status === 200 || injectedQuery.status === 503);
 
   // Dotted keys — the nested-path variant of the same trick.
-  const dotted = await postJson('/api/auth/login/admin', { 'user.role': 'admin', email: 'a@b.co', password: 'xxxxxxxx' });
+  const dotted = await postJson('/api/auth/login/staff', { 'user.role': 'admin', pin: '1234' });
   t('dotted keys do not authenticate', dotted.status !== 200, `status ${dotted.status}`);
 
   // The assertions above prove the request was refused, but not WHY — with no
@@ -205,9 +205,8 @@ try {
 
   // -------------------------------------------------------------------------
   console.log('\n--- schema validation rejects unknown keys ---');
-  const extra = await postJson('/api/auth/login/admin', {
-    email: 'a@b.co',
-    password: 'xxxxxxxx',
+  const extra = await postJson('/api/auth/login/staff', {
+    pin: '1234',
     role: 'admin', // privilege-escalation attempt
   });
   t('unknown field is a 400, not silently stripped', extra.status === 400, `status ${extra.status}`);
@@ -243,7 +242,7 @@ try {
   // only under NODE_ENV=test).
   const burst = [];
   for (let i = 0; i < 8; i += 1) {
-    burst.push(await postJson('/api/auth/login/admin', { email: 'nobody@example.com', password: 'wrongpassword' }));
+    burst.push(await postJson('/api/auth/login/staff', { pin: '0000' }));
   }
   const statuses = burst.map((r) => r.status);
   const limited = statuses.filter((s) => s === 429).length;

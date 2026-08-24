@@ -12,3 +12,6 @@ npm-debug.log*
 .DS_Store
 coverage/
 dist/
+
+# Local env backups — contain real credentials, never commit
+.env.*backup

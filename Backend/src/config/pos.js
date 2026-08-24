@@ -44,23 +44,23 @@ export const DEFAULT_TAX_RATE = 0;
  */
 export const CASHIER_VOID_WINDOW_MINUTES = 30;
 
-/**
- * How the restaurant identifies itself on a customer-facing invoice.
+/*
+ * The RESTAURANT constant that used to live here is gone.
  *
- * A constant rather than a Settings collection because nothing else in the
- * app needs it yet, and a one-row collection is a migration and an admin
- * screen for a value that changes when the business is renamed. Promote it to
- * the database the day a second location exists.
+ * It held the name and tagline printed on a customer invoice, and its own
+ * comment said to "promote it to the database the day a second location
+ * exists". That day arrived: identity is now a field on the Tenant document
+ * (src/models/Tenant.js), because one deployment serves many restaurants and a
+ * source-code constant can only describe one of them.
+ *
+ * What remains in this file is POLICY — discount ceilings, tax rate, the void
+ * window. Those are rules about how the till behaves, not facts about who the
+ * business is, and they are deliberately still constants.
  */
-export const RESTAURANT = Object.freeze({
-  name: 'Kimche Restora',
-  tagline: 'Thank you for dining with us',
-});
 
 export default {
   CASHIER_MAX_DISCOUNT_PERCENT,
   CASHIER_MAX_DISCOUNT_MINOR,
   DEFAULT_TAX_RATE,
   CASHIER_VOID_WINDOW_MINUTES,
-  RESTAURANT,
 };

@@ -129,9 +129,26 @@ process.stdout.write(`Running ${suites.length} unit suites (concurrency ${concur
 let green = report(await runAll(suites, concurrency));
 
 if (withIntegration) {
-  process.stdout.write('\nIntegration suite (requires MONGO_URI; writes to a *_test database)\n\n');
-  const integration = path.join(TESTS_DIR, 'integration', 'flow.test.mjs');
-  green = report([await runSuite(integration)]) && green;
+  process.stdout.write('\nIntegration suites (require MONGO_URI; write to a *_test database)\n\n');
+
+  /*
+   * Discovered, not hardcoded. This used to name flow.test.mjs directly, which
+   * meant a second integration suite could be added, committed and never run —
+   * the same silent-exclusion bug the recursive-glob note at the top of this
+   * file describes.
+   *
+   * Still serial: each suite wipes the database it shares, so running two at
+   * once would have them deleting each other's fixtures.
+   */
+  const dir = path.join(TESTS_DIR, 'integration');
+  const files = (await readdir(dir))
+    .filter((f) => f.endsWith('.test.mjs'))
+    .sort()
+    .map((f) => path.join(dir, f));
+
+  const results = [];
+  for (const file of files) results.push(await runSuite(file));
+  green = report(results) && green;
 }
 
 process.exit(green ? 0 : 1);

@@ -37,7 +37,13 @@ const LIVE_TTL_MS = 30_000;
 /** A day that has already ended. */
 const HISTORICAL_TTL_MS = 5 * 60_000;
 
-const STATS_PREFIX = key('stats');
+/*
+ * A function, not a constant. Evaluated at import it would capture the
+ * tenantless `pos:global:` prefix, so invalidating would clear a namespace no
+ * request ever writes to — leaving every restaurant's real figures cached and
+ * making "refresh now" silently do nothing. Same bug class as the menu keys.
+ */
+const statsPrefix = () => key('stats');
 
 /**
  * Per role, not per user: dashboardScopeFor() returns one of two payloads
@@ -66,7 +72,7 @@ export const rememberMonthlyReport = (month, compute) =>
  * above) — this exists for tests and for an admin-facing "refresh now" if one
  * is ever added.
  */
-export const invalidateStats = () => delPrefix(STATS_PREFIX);
+export const invalidateStats = () => delPrefix(statsPrefix());
 
 export default {
   rememberDashboard,

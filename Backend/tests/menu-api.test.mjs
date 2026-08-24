@@ -334,7 +334,7 @@ t('menu rows are dropped only by the two guarded delete handlers',
 
 const orderSrc = fs.readFileSync(path.join(ROOT, 'src/models/Order.js'), 'utf8');
 t('the history check is index-backed, not a collection scan',
-  /index\(\{\s*'items\.menuItem': 1\s*\}\)/.test(orderSrc));
+  /index\(\{ tenantId: 1, 'items\.menuItem': 1 \}\)/.test(orderSrc));
 t('price changes are audited', /MENU_ITEM_PRICE_CHANGE/.test(ctlSrc));
 t('availability handler assigns one field, not the body',
   /item\.available = available;/.test(ctlSrc) && !/Object\.assign\(item, req\.body\)/.test(ctlSrc));

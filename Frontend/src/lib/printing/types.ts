@@ -100,6 +100,15 @@ export const DEFAULT_PRINTER_SETTINGS: PrinterSettings = {
   businessPhone: '',
   gstNumber: '',
   footerLine: '',
-  effectiveName: 'Kimche Restora',
-  effectiveFooter: 'Thank you for dining with us',
+  /*
+   * Empty, not a restaurant's name.
+   *
+   * These are the values used before the server's settings have loaded. A
+   * hardcoded name here would print one restaurant's identity on another's
+   * receipt during that window — the header simply renders blank instead,
+   * which is wrong in a way anyone can see rather than wrong in a way nobody
+   * notices.
+   */
+  effectiveName: '',
+  effectiveFooter: '',
 };

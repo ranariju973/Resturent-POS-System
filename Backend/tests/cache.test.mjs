@@ -7,13 +7,15 @@
  * that takes neighbouring keys with it — are all behaviour, and none of them
  * are visible in a regex over the file.
  */
+import mongoose from 'mongoose';
 import * as cache from '../src/utils/cache.js';
+import { runInTenant } from '../src/utils/tenantContext.js';
 import {
   isCacheableItemQuery,
   invalidateMenu,
   rememberItems,
-  MENU_ITEMS_KEY,
-  MENU_CATEGORIES_KEY,
+  menuItemsKey,
+  menuCategoriesKey,
 } from '../src/utils/menuCache.js';
 import { rememberUser, invalidateUsers } from '../src/utils/userCache.js';
 
@@ -28,10 +30,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 console.log('--- keys are namespaced ---');
 {
   const k = cache.key('menu', 'items');
-  t('key is prefixed with pos: and the tenant', k === 'pos:default:menu:items', k);
-  // The tenant segment is the whole point: it is what stops a multi-tenant
-  // future from having to find and re-key every entry in the codebase.
-  t('the tenant segment is present today', k.split(':')[1] === cache.DEFAULT_TENANT);
+  t('a key built outside a request falls back to the global namespace',
+    k === 'pos:global:menu:items', k);
+
+  /*
+   * The tenant segment is the whole point: it is what stops one restaurant's
+   * cached menu being served to another. Asserting that two restaurants
+   * produce DIFFERENT keys is the property — asserting the prefix merely
+   * describes the format.
+   */
+  const alpha = String(new mongoose.Types.ObjectId());
+  const beta = String(new mongoose.Types.ObjectId());
+  const alphaKey = runInTenant(alpha, () => cache.key('menu', 'items'));
+  const betaKey = runInTenant(beta, () => cache.key('menu', 'items'));
+
+  t('a key inside a request carries that restaurant\'s id',
+    alphaKey === `pos:${alpha}:menu:items`, alphaKey);
+  t('two restaurants never share a cache key for the same data',
+    alphaKey !== betaKey);
+  t('and neither collides with the global namespace',
+    alphaKey !== k && betaKey !== k);
 }
 
 console.log('\n--- get / set / del ---');
@@ -130,22 +148,22 @@ console.log('\n--- only the till\'s plain menu read is cacheable ---');
 console.log('\n--- invalidateMenu drops both halves ---');
 {
   cache.clearAll();
-  await cache.set(MENU_ITEMS_KEY, ['item'], 60_000);
-  await cache.set(MENU_CATEGORIES_KEY, ['cat'], 60_000);
+  await cache.set(menuItemsKey(), ['item'], 60_000);
+  await cache.set(menuCategoriesKey(), ['cat'], 60_000);
 
   await invalidateMenu();
 
-  t('items are dropped', (await cache.get(MENU_ITEMS_KEY)) === null);
+  t('items are dropped', (await cache.get(menuItemsKey())) === null);
   // Categories carry per-category item counts, so an item write changes the
   // categories payload too. Dropping only the "obvious" one is how counts drift.
-  t('categories are dropped with them', (await cache.get(MENU_CATEGORIES_KEY)) === null);
+  t('categories are dropped with them', (await cache.get(menuCategoriesKey())) === null);
 }
 
 console.log('\n--- rememberItems uses the shared key ---');
 {
   cache.clearAll();
   await rememberItems(async () => ({ items: [], count: 0 }));
-  t('it wrote to the key invalidateMenu clears', (await cache.get(MENU_ITEMS_KEY)) !== null);
+  t('it wrote to the key invalidateMenu clears', (await cache.get(menuItemsKey())) !== null);
 }
 
 console.log('\n--- invalidateUsers clears every session, not one ---');

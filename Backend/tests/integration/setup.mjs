@@ -27,15 +27,37 @@ const ROOT = path.resolve(import.meta.dirname, '../..');
 dotenv.config({ path: path.join(ROOT, '.env') });
 
 /**
- * Force the database name to a `_test` suffix.
+ * Force the database name to a `_test` suffix, and give each SUITE its own.
+ *
+ * ── Why per-suite and not one shared test database ─────────────────────────
+ * Every suite here calls `wipe()`, which empties every collection. With one
+ * shared database that is only safe while exactly one suite runs at a time —
+ * and nothing enforces that. Two suites overlapping (a stray background run, a
+ * developer running one file while `verify:all` is going) delete each other's
+ * fixtures, and the symptom is not a clean failure: it is a suite that stalls
+ * or reports something impossible, which costs far more to diagnose than it
+ * ever costs to isolate.
+ *
+ * The suffix comes from the entry file's name, so the isolation is automatic
+ * for any suite added later.
+ *
  * @param {string} uri
+ * @param {string} [suite] Short suite name; defaults to the running file's.
  */
-export function toTestUri(uri) {
+export function toTestUri(uri, suite) {
   if (!uri) throw new Error('MONGO_URI is not set — copy .env.example to .env first');
+
+  const entry = process.argv[1] ?? '';
+  const label = (suite ?? path.basename(entry).replace(/\.test\.mjs$/, ''))
+    .replace(/[^a-z0-9]+/gi, '_')
+    .toLowerCase()
+    .slice(0, 40);
 
   const u = new URL(uri);
   const current = u.pathname.replace(/^\//, '') || 'test';
-  const name = current.endsWith('_test') ? current : `${current}_test`;
+  const base = current.endsWith('_test') ? current : `${current}_test`;
+  const name = label ? `${base}_${label}` : base;
+
   u.pathname = `/${name}`;
   return { uri: u.toString(), dbName: name };
 }
@@ -45,8 +67,11 @@ function assertSafe(dbName) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('Integration tests refuse to run with NODE_ENV=production');
   }
-  if (!dbName.endsWith('_test')) {
-    throw new Error(`Refusing to run against "${dbName}" — the database name must end in _test`);
+  // `_test` or `_test_<suite>`. Anything else could plausibly be real data.
+  if (!/_test(_[a-z0-9_]+)?$/.test(dbName)) {
+    throw new Error(
+      `Refusing to run against "${dbName}" — the database name must contain _test`,
+    );
   }
 }
 

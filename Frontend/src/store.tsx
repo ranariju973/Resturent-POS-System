@@ -47,12 +47,19 @@ import type {
   Ticket,
 } from './data/types';
 import {
-  loginAdmin,
+  loginGoogle,
   loginStaff,
+  createRestaurant,
+  fetchTerminalInfo,
+  linkTerminal,
   logout as apiLogout,
   restoreSession,
   loginErrorMessage,
+  isTerminalNotLinked,
   type SessionUser,
+  type Restaurant,
+  type Terminal,
+  type Onboarding,
 } from './lib/auth';
 import { canViewScreen, defaultScreen } from './lib/permissions';
 
@@ -102,9 +109,15 @@ function describe(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/*
+ * `restaurantName` and `terminalLabel` used to live here as constants.
+ *
+ * They are now per-restaurant data — read from the session for a signed-in
+ * user, and from the terminal's own binding on the login screen, which is what
+ * lets one deployment serve many restaurants without every till claiming to be
+ * the same one. See state.restaurant and state.terminal.
+ */
 export const CONFIG = {
-  restaurantName: 'Kimche Restora',
-  terminalLabel: 'Terminal 1 · Front counter',
   orderNumber: 20,
   pinLength: 4,
   showTaxRow: true,
@@ -205,7 +218,32 @@ export type TablePanel = 'summary' | 'transfer' | 'merge' | 'split';
 
 interface State {
   user: SessionUser | null;
-  mode: 'pin' | 'password';
+  /**
+   * Which restaurant the session belongs to. Null before onboarding names one,
+   * and on the login screen it holds whatever the terminal is linked to — so
+   * the keypad can say where it is standing.
+   */
+  restaurant: Restaurant | null;
+  /** The terminal this browser is linked to, when it is. */
+  terminal: Terminal | null;
+  /**
+   * False when this browser has never been linked to a restaurant. The PIN
+   * keypad is meaningless in that state — the server cannot resolve which
+   * restaurant four digits belong to — so the login screen offers Google
+   * sign-in and setup instead.
+   */
+  terminalLinked: boolean;
+  /**
+   * Set when a Google account has signed in but belongs to no restaurant. The
+   * app renders the naming step instead of the till until it clears.
+   */
+  onboarding: Onboarding | null;
+  /** The restaurant-name field on that step. */
+  restaurantName: string;
+  /** An administrator is naming this terminal, on the setup card. */
+  terminalSetup: boolean;
+  terminalName: string;
+  mode: 'pin' | 'google';
   pin: string;
   /**
    * The authenticated staff member, shown on the confirmation badge.
@@ -218,8 +256,6 @@ interface State {
   match: SessionUser | null;
   loginError: string;
   shaking: boolean;
-  email: string;
-  password: string;
   /** A login request is in flight — disables the keypad and the sign-in button. */
   authPending: boolean;
   /** Restoring a session on boot; the app shows nothing until this settles. */
@@ -491,13 +527,21 @@ interface State {
 const createInitialState = (): State => {
   return {
     user: null,
+    restaurant: null,
+    terminal: null,
+    // Assume linked until the terminal check says otherwise, so a slow network
+    // shows the familiar keypad rather than flashing a setup screen at staff
+    // who are standing at a terminal that has worked for months.
+    terminalLinked: true,
+    onboarding: null,
+    restaurantName: '',
+    terminalSetup: false,
+    terminalName: '',
     mode: 'pin',
     pin: '',
     match: null,
     loginError: '',
     shaking: false,
-    email: '',
-    password: '',
     authPending: false,
     authBooting: true,
 
@@ -925,9 +969,33 @@ function usePosState() {
         patch({ pin, loginError: '', authPending: true });
 
         try {
-          const user = await loginStaff(pin);
-          patch({ match: user, authPending: false, loginError: '' });
+          const session = await loginStaff(pin);
+          patch({
+            match: session.user,
+            restaurant: session.restaurant,
+            terminal: session.terminal,
+            authPending: false,
+            loginError: '',
+          });
         } catch (err) {
+          /*
+           * An unlinked terminal is not a wrong PIN, and must not be shown as
+           * one. Shaking the keypad at a cashier who typed correctly sends
+           * them looking for a mistake they did not make; the honest answer is
+           * that this machine was never set up, which needs an owner.
+           */
+          if (isTerminalNotLinked(err)) {
+            patch({
+              terminalLinked: false,
+              mode: 'google',
+              pin: '',
+              match: null,
+              authPending: false,
+              loginError: '',
+            });
+            return;
+          }
+
           patch({
             loginError: loginErrorMessage(err, 'Incorrect PIN'),
             pin: '',
@@ -948,28 +1016,132 @@ function usePosState() {
         if (match) patch({ user: match, pin: '', match: null, ...landingScreen(match) });
       },
 
-      signIn: async () => {
-        const { email, password, authPending } = ref.current;
+      /**
+       * Google sign-in, for owners and administrators.
+       *
+       * `credential` is the ID token Google Identity Services hands the page.
+       * It is not inspected here — the server verifies it against Google's
+       * published keys, and a client-side opinion about it would be worth
+       * nothing anyway.
+       */
+      signInWithGoogle: async (credential: string) => {
+        if (ref.current.authPending) return;
+        patch({ authPending: true, loginError: '' });
+
+        try {
+          const session = await loginGoogle(credential);
+
+          /*
+           * A real session that cannot reach anything yet.
+           *
+           * Deliberately does NOT call landingScreen: there is no restaurant,
+           * so every screen behind the nav would fail its first request. The
+           * app renders the naming step instead, and the server agrees — a
+           * token with no restaurant can only reach /auth/me and /tenants.
+           */
+          if (session.onboarding) {
+            patch({
+              user: session.user,
+              onboarding: session.onboarding,
+              restaurantName: session.onboarding.suggestedName ?? '',
+              authPending: false,
+              loginError: '',
+            });
+            return;
+          }
+
+          patch({
+            user: session.user,
+            restaurant: session.restaurant,
+            onboarding: null,
+            authPending: false,
+            loginError: '',
+            ...landingScreen(session.user),
+          });
+        } catch (err) {
+          patch({
+            loginError: loginErrorMessage(err, 'Google sign-in was refused'),
+            authPending: false,
+          });
+          shakeNow();
+        }
+      },
+
+      setRestaurantName: (restaurantName: string) => patch({ restaurantName }),
+
+      /** Name the restaurant, and become its administrator. */
+      submitRestaurantName: async () => {
+        const { restaurantName, authPending } = ref.current;
+        const name = restaurantName.trim();
         if (authPending) return;
+        if (name.length < 2) {
+          return patch({ loginError: 'Enter a name with at least 2 characters' });
+        }
 
         patch({ authPending: true, loginError: '' });
 
         try {
-          const user = await loginAdmin(email, password);
+          const session = await createRestaurant(name);
           patch({
-            user,
-            loginError: '',
-            password: '',
+            user: session.user,
+            restaurant: session.restaurant,
+            onboarding: null,
+            restaurantName: '',
             authPending: false,
-            ...landingScreen(user),
+            loginError: '',
+            ...landingScreen(session.user),
           });
         } catch (err) {
           patch({
-            loginError: loginErrorMessage(err, 'Incorrect email or password'),
-            password: '',
+            loginError: loginErrorMessage(err, 'Could not create the restaurant'),
             authPending: false,
           });
-          shakeNow();
+        }
+      },
+
+      openTerminalSetup: () =>
+        patch({
+          terminalSetup: true,
+          terminalName: ref.current.terminal?.name ?? 'Terminal 1',
+          loginError: '',
+        }),
+
+      closeTerminalSetup: () => patch({ terminalSetup: false, loginError: '' }),
+
+      setTerminalName: (terminalName: string) => patch({ terminalName }),
+
+      /**
+       * Link this browser to the administrator's restaurant.
+       *
+       * The token comes back as an httpOnly cookie, never in the response, so
+       * there is nothing to store here — after this call the machine simply
+       * starts presenting it, and staff PIN sign-in begins working.
+       */
+      linkThisTerminal: async () => {
+        const { terminalName, authPending } = ref.current;
+        const name = terminalName.trim();
+        if (authPending) return;
+        if (name.length < 2) {
+          return patch({ loginError: 'Enter a name with at least 2 characters' });
+        }
+
+        patch({ authPending: true, loginError: '' });
+
+        try {
+          const terminal = await linkTerminal(name);
+          patch({
+            terminal,
+            terminalLinked: true,
+            terminalSetup: false,
+            authPending: false,
+            loginError: '',
+            toast: `This terminal is now linked as “${terminal.name}”`,
+          });
+        } catch (err) {
+          patch({
+            loginError: loginErrorMessage(err, 'Could not link this terminal'),
+            authPending: false,
+          });
         }
       },
 
@@ -981,13 +1153,26 @@ function usePosState() {
        * revoke is what actually ends the session, and it still runs.
        */
       logout: () => {
+        /*
+         * The terminal binding deliberately SURVIVES a logout.
+         *
+         * It is a property of the machine, not of whoever last used it —
+         * clearing it would mean an owner had to re-link the till every time a
+         * cashier finished a shift. `restaurant` is kept for the same reason:
+         * the login screen names the restaurant this terminal belongs to.
+         */
+        const { terminal, terminalLinked, restaurant } = ref.current;
         patch({
           user: null,
+          restaurant: terminalLinked ? restaurant : null,
+          terminal,
+          terminalLinked,
+          onboarding: null,
+          restaurantName: '',
+          terminalSetup: false,
           mode: 'pin',
           pin: '',
           match: null,
-          email: '',
-          password: '',
           loginError: '',
           authPending: false,
           lastSettled: null,
@@ -1000,8 +1185,51 @@ function usePosState() {
       /** Boot-time session restore, driven by the httpOnly refresh cookie. */
       bootstrapAuth: async () => {
         try {
-          const user = await restoreSession();
-          patch({ user, authBooting: false, ...landingScreen(user) });
+          /*
+           * Both at once: the session may not exist, and the terminal label is
+           * needed either way — a signed-out machine still has to name its
+           * restaurant on the keypad.
+           */
+          const [session, info] = await Promise.all([restoreSession(), fetchTerminalInfo()]);
+
+          const terminalState = {
+            terminalLinked: info.linked,
+            terminal: info.terminal,
+          };
+
+          if (!session) {
+            return patch({
+              user: null,
+              authBooting: false,
+              ...terminalState,
+              restaurant: info.restaurant
+                ? { id: '', name: info.restaurant.name, slug: info.restaurant.slug }
+                : null,
+              // An unlinked machine cannot take a PIN, so open on the door
+              // that still works.
+              mode: info.linked ? 'pin' : 'google',
+            });
+          }
+
+          // A restored session that never finished onboarding resumes there.
+          if (session.onboarding) {
+            return patch({
+              user: session.user,
+              onboarding: session.onboarding,
+              restaurantName: session.onboarding.suggestedName ?? '',
+              authBooting: false,
+              ...terminalState,
+            });
+          }
+
+          patch({
+            user: session.user,
+            restaurant: session.restaurant,
+            onboarding: null,
+            authBooting: false,
+            ...terminalState,
+            ...landingScreen(session.user),
+          });
         } catch {
           patch({ user: null, authBooting: false });
         }
@@ -1195,6 +1423,7 @@ function usePosState() {
       shareOnWhatsApp: () => {
         const settled = ref.current.lastSettled;
         if (!settled) return;
+        const restaurantName = ref.current.restaurant?.name ?? 'us';
 
         /**
          * Strip everything that is not a digit — including the bullet
@@ -1221,7 +1450,7 @@ function usePosState() {
         // from an unknown number reads like spam, and a customer should be able
         // to see what it is for before deciding to tap it.
         const message =
-          `Thank you for visiting ${CONFIG.restaurantName}.\n\n` +
+          `Thank you for visiting ${restaurantName}.\n\n` +
           `Invoice ${settled.invoiceNo}\n` +
           `Total: ${money(settled.total)}\n\n` +
           `View or download your bill:\n${settled.url}`;

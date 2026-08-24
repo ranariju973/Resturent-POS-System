@@ -30,6 +30,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { env } from '../config/env.js';
 import { ROLES, ROLE_VALUES, PIN_ROLES } from '../constants/enums.js';
 import { minorField } from '../utils/money.js';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const BCRYPT_COST = 12;
 const PIN_LENGTH = 4;
@@ -88,6 +89,57 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
 
+    /**
+     * How a Google account is recognised across sessions — the `sub` claim.
+     *
+     * GLOBALLY unique, and this is a decision worth stating plainly.
+     *
+     * Scoping it per restaurant is tempting, and would allow one person to
+     * hold a separate row at each restaurant they work for. But sign-in has no
+     * tenant context — that is the whole problem it is solving — so a
+     * per-restaurant key would leave the handler unable to decide WHICH row to
+     * log in as, and "find or create" would mint a duplicate on every visit.
+     * A global key gives exactly one row per Google account, found
+     * deterministically.
+     *
+     * The consequence, stated so it is a choice and not an accident: one
+     * Google account belongs to one restaurant. Supporting an owner with two
+     * venues later means a Membership collection ({user, tenant, role}) and a
+     * restaurant picker after sign-in — this field would not have to change.
+     */
+    googleId: {
+      type: String,
+      trim: true,
+      maxlength: 255,
+      /*
+       * A PARTIAL index, not a sparse one.
+       *
+       * `sparse` skips a document only when the field is genuinely ABSENT — an
+       * explicit `googleId: null` still occupies the index, so two PIN staff
+       * written with that field set to null would collide on a duplicate key.
+       * A partial index conditions on the type instead, which is true only for
+       * an account that really has a Google identity.
+       */
+      index: {
+        unique: true,
+        partialFilterExpression: { googleId: { $type: 'string' } },
+      },
+    },
+
+    /**
+     * Which credential this account actually authenticates with.
+     *
+     * 'google' for owners and administrators, 'pin' for staff at a terminal.
+     * Recorded rather than inferred from which hash happens to be populated,
+     * so the pre-validate check below can state the invariant directly.
+     */
+    authProvider: {
+      type: String,
+      enum: ['google', 'pin'],
+      default: 'pin',
+      index: true,
+    },
+
     // Admins only. `sparse` so the many PIN users with no email do not all
     // collide on null under the unique index.
     email: {
@@ -96,14 +148,13 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       maxlength: 254,
       match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Invalid email address'],
-      index: { unique: true, sparse: true },
     },
 
     // select:false — these never load unless a query explicitly asks, so they
     // cannot leak through a stray `res.json(user)` even if toJSON were missed.
     passwordHash: { type: String, select: false },
     pinHash: { type: String, select: false },
-    pinLookup: { type: String, select: false, index: { unique: true, sparse: true } },
+    pinLookup: { type: String, select: false },
 
     /**
      * ── Manager override PIN (admins only) ─────────────────────────────────
@@ -124,7 +175,7 @@ const userSchema = new mongoose.Schema(
      * and the cashier has to fetch someone who can.
      */
     overridePinHash: { type: String, select: false },
-    overridePinLookup: { type: String, select: false, index: { unique: true, sparse: true } },
+    overridePinLookup: { type: String, select: false },
 
     avatarUrl: { type: String, trim: true, maxlength: 500, default: '' },
 
@@ -204,6 +255,43 @@ userSchema.virtual('isLocked').get(function lockedGetter() {
   return Boolean(this.lockUntil && this.lockUntil.getTime() > Date.now());
 });
 
+/**
+ * ── Every credential is unique PER RESTAURANT, never globally ──────────────
+ *
+ * This is the single most important index change in the multi-tenant work,
+ * and `pinLookup` is why.
+ *
+ * `pinLookup` used to carry a GLOBAL unique index, and `findActiveByPin`
+ * searched every user on the deployment. Two consequences, both bad:
+ *
+ *   1. Restaurant A issuing PIN 1234 stopped restaurant B from ever using it
+ *      — one venue silently consuming another's four-digit space.
+ *   2. Worse: B's cashier tapping their PIN could match A's row, which is a
+ *      cross-restaurant authentication failure, not a scaling limit.
+ *
+ * Scoping the key to {tenantId, pinLookup} fixes both at the database level.
+ * The lookup itself stays a single indexed equality, because the tenant is
+ * resolved from the terminal's device binding BEFORE the PIN is matched (see
+ * authController.loginStaff) — so the query is O(1) exactly as before.
+ *
+ * `email` is scoped for the same reason: one person may be an owner at one
+ * restaurant and a staff member at another, and a global index would make the
+ * second record impossible to create.
+ *
+ * `required: false` is the one relaxation of the plugin's default, and it
+ * exists for a single narrow state: a Google account that has signed in but
+ * has not yet named a restaurant. Such a user genuinely belongs to no tenant
+ * for the length of the onboarding step. Every other model requires one.
+ */
+userSchema.plugin(tenantScoped, {
+  required: false,
+  unique: [
+    { fields: { email: 1 }, options: { sparse: true } },
+    { fields: { pinLookup: 1 }, options: { sparse: true } },
+    { fields: { overridePinLookup: 1 }, options: { sparse: true } },
+  ],
+});
+
 // --- Integrity -------------------------------------------------------------
 // An admin without a password, or a cashier without a PIN, is an account that
 // can never be authenticated — reject it at write time rather than discovering
@@ -211,8 +299,16 @@ userSchema.virtual('isLocked').get(function lockedGetter() {
 userSchema.pre('validate', function validateCredentialShape(next) {
   if (this.role === ROLES.ADMIN) {
     if (!this.email) return next(new Error('Admin accounts require an email address'));
-    if (!this.passwordHash && this.isNew) {
-      return next(new Error('Admin accounts require a password'));
+
+    /*
+     * The invariant is unchanged in substance — an account that can never be
+     * authenticated is refused at write time — but the credential moved.
+     * Administrators sign in with Google, which stores no password, so
+     * googleId is what proves the account is reachable. A row with neither is
+     * still refused.
+     */
+    if (this.isNew && !this.googleId && !this.passwordHash) {
+      return next(new Error('Admin accounts require a Google identity'));
     }
   }
 

@@ -16,6 +16,7 @@
  */
 import mongoose from 'mongoose';
 import { TABLE_STATUS, TABLE_STATUS_VALUES, TABLE_TRANSITIONS } from '../constants/enums.js';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const tableSchema = new mongoose.Schema(
   {
@@ -95,18 +96,24 @@ tableSchema.virtual('occupiedMinutes').get(function occupiedMinutes() {
   return Math.floor((Date.now() - this.occupiedAt.getTime()) / 60000);
 });
 
-// Names are unique among live tables; a deleted table frees its name.
-tableSchema.index(
-  { name: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { isActive: true },
-    collation: { locale: 'en', strength: 2 },
-  },
-);
+/*
+ * Names are unique among live tables; a deleted table frees its name. Scoped
+ * per restaurant, so every venue can have its own "T1".
+ */
+tableSchema.plugin(tenantScoped, {
+  unique: [
+    {
+      fields: { name: 1 },
+      options: {
+        partialFilterExpression: { isActive: true },
+        collation: { locale: 'en', strength: 2 },
+      },
+    },
+  ],
+});
 
-tableSchema.index({ zone: 1, name: 1 });
-tableSchema.index({ isActive: 1, status: 1 });
+tableSchema.index({ tenantId: 1, zone: 1, name: 1 });
+tableSchema.index({ tenantId: 1, isActive: 1, status: 1 });
 
 /**
  * Is this status change legal from where the table is now?

@@ -7,6 +7,7 @@
  * that silently removes products from the POS grid mid-service.
  */
 import mongoose from 'mongoose';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const categorySchema = new mongoose.Schema(
   {
@@ -49,18 +50,27 @@ categorySchema.virtual('id').get(function idGetter() {
   return this._id?.toHexString?.() ?? this._id;
 });
 
-// Case-insensitive uniqueness among live categories only, so a name freed by
-// a soft delete can be reused, and 'pizza' cannot be added alongside 'Pizza'.
-categorySchema.index(
-  { name: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { isActive: true },
-    collation: { locale: 'en', strength: 2 },
-  },
-);
+/*
+ * Case-insensitive uniqueness among live categories only, so a name freed by
+ * a soft delete can be reused, and 'pizza' cannot be added alongside 'Pizza'.
+ *
+ * Declared through the plugin so the key is {tenantId, name}: two restaurants
+ * both having a 'Beverages' is normal, and a global index would have let
+ * whichever signed up first take the name away from everyone else.
+ */
+categorySchema.plugin(tenantScoped, {
+  unique: [
+    {
+      fields: { name: 1 },
+      options: {
+        partialFilterExpression: { isActive: true },
+        collation: { locale: 'en', strength: 2 },
+      },
+    },
+  ],
+});
 
-categorySchema.index({ sortOrder: 1, name: 1 });
+categorySchema.index({ tenantId: 1, sortOrder: 1, name: 1 });
 
 export const Category = mongoose.model('Category', categorySchema);
 export default Category;

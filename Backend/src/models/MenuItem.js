@@ -17,6 +17,7 @@
  */
 import mongoose from 'mongoose';
 import { minorField } from '../utils/money.js';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const menuItemSchema = new mongoose.Schema(
   {
@@ -82,22 +83,35 @@ menuItemSchema.virtual('price').get(function priceGetter() {
   return this.priceMinor / 100;
 });
 
-// Name is unique per category among live items — 'Cold Brew' can exist in
-// Beverages without blocking a differently-priced 'Cold Brew' elsewhere.
-menuItemSchema.index(
-  { category: 1, name: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { isActive: true },
-    collation: { locale: 'en', strength: 2 },
-  },
-);
+/*
+ * Name is unique per category among live items — 'Cold Brew' can exist in
+ * Beverages without blocking a differently-priced 'Cold Brew' elsewhere — and
+ * per restaurant, so one venue's menu never constrains another's.
+ */
+menuItemSchema.plugin(tenantScoped, {
+  unique: [
+    {
+      fields: { category: 1, name: 1 },
+      options: {
+        partialFilterExpression: { isActive: true },
+        collation: { locale: 'en', strength: 2 },
+      },
+    },
+  ],
+});
 
 // The POS grid query: live items in a category, in stock.
-menuItemSchema.index({ isActive: 1, available: 1, category: 1 });
+menuItemSchema.index({ tenantId: 1, isActive: 1, available: 1, category: 1 });
 
-// Search-by-name for the menu screen.
-menuItemSchema.index({ name: 'text' });
+/*
+ * Search-by-name for the menu screen.
+ *
+ * tenantId leads the key so a search seeks straight to one restaurant's items
+ * rather than scanning every menu on the deployment and discarding the rest.
+ * MongoDB permits only one text index per collection, which makes this the
+ * one chance to get its shape right.
+ */
+menuItemSchema.index({ tenantId: 1, name: 'text' });
 
 /** Soft delete. Keeps the row resolvable from historical orders. */
 menuItemSchema.methods.softDelete = function softDelete() {

@@ -28,13 +28,27 @@ process.env.JWT_ACCESS_SECRET ??= 'a'.repeat(64);
 process.env.JWT_REFRESH_SECRET ??= 'b'.repeat(64);
 process.env.PIN_PEPPER ??= 'c'.repeat(64);
 process.env.INVOICE_TOKEN_PEPPER ??= 'v'.repeat(64);
+// Distinct values: env.js refuses to boot when any two secrets match.
+process.env.DEVICE_TOKEN_PEPPER ??= 'd'.repeat(64);
+process.env.GOOGLE_CLIENT_ID ??= 'test-client.apps.googleusercontent.com';
 process.env.CORS_ORIGIN ??= 'http://localhost:5173';
 process.env.CLOUDINARY_CLOUD_NAME ??= 'test';
 process.env.CLOUDINARY_API_KEY ??= 'test';
 process.env.CLOUDINARY_API_SECRET ??= 'test';
-process.env.LOG_LEVEL = 'error';
+process.env.LOG_LEVEL = process.env.DEBUG_FLOW ? 'debug' : 'error';
 
 const { t, section, finish } = createReporter();
+
+/*
+ * Without this, a rejected promise inside the try block ends the process with
+ * a zero exit code and no output — which reads as "the suite stopped" and
+ * hides the actual error. Node's default for an unhandled rejection is not
+ * loud enough for a test runner.
+ */
+process.on('unhandledRejection', (err) => {
+  process.stderr.write(`\nUNHANDLED REJECTION: ${err?.stack ?? err}\n`);
+  process.exit(1);
+});
 
 await connect();
 await wipe();
@@ -48,6 +62,9 @@ const { Order } = await import(`${ROOT}/src/models/Order.js`);
 const { Ticket } = await import(`${ROOT}/src/models/Ticket.js`);
 const { AuditLog } = await import(`${ROOT}/src/models/AuditLog.js`);
 const { ROLES } = await import(`${ROOT}/src/constants/enums.js`);
+const { Tenant } = await import(`${ROOT}/src/models/Tenant.js`);
+const { runInTenant, runUnscoped } = await import(`${ROOT}/src/utils/tenantContext.js`);
+const { signAccessToken } = await import(`${ROOT}/src/utils/jwt.js`);
 
 const server = app.listen(0);
 await new Promise((r) => server.once('listening', r));
@@ -62,6 +79,8 @@ const api = async (method, url, { token, body, cookie } = {}) => {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+    // A hung request must fail the suite, not stall it silently forever.
+    signal: AbortSignal.timeout(10_000),
   });
 
   let json = null;
@@ -73,7 +92,23 @@ const api = async (method, url, { token, body, cookie } = {}) => {
   return { status: res.status, body: json, headers: res.headers };
 };
 
+/*
+ * The restaurant everything below belongs to.
+ *
+ * Created before the try block so the whole suite can run inside its context:
+ * this file reaches for the models directly in a dozen places — to inspect a
+ * Ticket, to reprice an item behind the API's back, to count orders — and each
+ * of those is a tenant-scoped query that would otherwise refuse to run.
+ *
+ * The HTTP calls do not depend on this wrapper. requireAuth resolves the
+ * restaurant from the signed-in account and enters the context itself, which
+ * is the path a real request takes.
+ */
+const tenant = await runUnscoped('integration fixtures: create the restaurant', async () =>
+  Tenant.create({ name: 'Integration Test Diner', slug: 'integration-test-diner' }));
+
 try {
+ await runInTenant(tenant._id, async () => {
   // -------------------------------------------------------------------------
   section('fixtures');
 
@@ -81,73 +116,101 @@ try {
   const CASHIER_PIN = '4242';
   const OVERRIDE_PIN = '9137';
 
-  const admin = new User({
-    name: 'Test Admin',
-    email: 'admin@integration.test',
-    role: ROLES.ADMIN,
-    isActive: true,
-  });
-  await admin.setPassword(ADMIN_PASSWORD);
-  await admin.setOverridePin(OVERRIDE_PIN);
-  await admin.save();
+  /*
+   * Everything below belongs to one restaurant.
+   *
+   * Fixtures are written through the models directly, which means they need a
+   * tenant in context — the tenantScoped plugin refuses an unscoped write
+   * rather than creating a record that belongs to nobody. The HTTP requests
+   * further down need no such wrapper: requireAuth resolves the tenant from
+   * the signed-in account and enters the context itself, which is the path a
+   * real request takes.
+   */
+  const {
+    admin, cashier, category, coldBrew, soldOut, table,
+  } = await runInTenant(tenant._id, async () => {
+    const adminUser = new User({
+      name: 'Test Admin',
+      email: 'admin@integration.test',
+      role: ROLES.ADMIN,
+      isActive: true,
+    });
+    await adminUser.setPassword(ADMIN_PASSWORD);
+    await adminUser.setOverridePin(OVERRIDE_PIN);
+    await adminUser.save();
 
-  const cashier = new User({ name: 'Test Cashier', role: ROLES.CASHIER, isActive: true });
-  await cashier.setPin(CASHIER_PIN);
-  await cashier.save();
+    const cashierUser = new User({ name: 'Test Cashier', role: ROLES.CASHIER, isActive: true });
+    await cashierUser.setPin(CASHIER_PIN);
+    await cashierUser.save();
 
-  const category = await Category.create({ name: 'Beverages', color: '#00754A' });
-  const coldBrew = await MenuItem.create({
-    name: 'Cold Brew',
-    priceMinor: 425,
-    category: category._id,
-    available: true,
+    const cat = await Category.create({ name: 'Beverages', color: '#00754A' });
+    const brew = await MenuItem.create({
+      name: 'Cold Brew',
+      priceMinor: 425,
+      category: cat._id,
+      available: true,
+    });
+    const matcha = await MenuItem.create({
+      name: 'Iced Matcha',
+      priceMinor: 525,
+      category: cat._id,
+      available: false,
+    });
+    const t1 = await Table.create({ name: 'T1', seats: 4, zone: 'Indoor' });
+
+    return {
+      admin: adminUser,
+      cashier: cashierUser,
+      category: cat,
+      coldBrew: brew,
+      soldOut: matcha,
+      table: t1,
+    };
   });
-  const soldOut = await MenuItem.create({
-    name: 'Iced Matcha',
-    priceMinor: 525,
-    category: category._id,
-    available: false,
-  });
-  const table = await Table.create({ name: 'T1', seats: 4, zone: 'Indoor' });
 
   t('fixtures created', Boolean(admin._id && cashier._id && coldBrew._id && table._id));
+  t('and they all belong to the same restaurant',
+    [admin, cashier, category, coldBrew, table]
+      .every((doc) => String(doc.tenantId) === String(tenant._id)));
 
   // -------------------------------------------------------------------------
   section('authentication actually works');
 
-  const badLogin = await api('POST', '/api/auth/login/admin', {
-    body: { email: 'admin@integration.test', password: 'wrong-password' },
+  /*
+   * ── Sessions are obtained directly, not through a login form ─────────────
+   * Administrators sign in with Google, whose token this suite cannot mint,
+   * and staff sign in at a terminal whose device cookie is a whole flow of its
+   * own. Both of those — and every failure mode around them — are covered end
+   * to end by onboarding-flow.test.mjs.
+   *
+   * What THIS suite is for is the order path: transactions, forged prices,
+   * table races and RBAC against real data. So it takes the sessions as given
+   * and spends its assertions on the part nothing else covers.
+   */
+  const adminToken = signAccessToken({
+    id: admin._id,
+    role: admin.role,
+    tokenVersion: admin.tokenVersion ?? 0,
+    tenantId: tenant._id,
   });
-  t('a wrong password is refused', badLogin.status === 401, `status ${badLogin.status}`);
-  t('...with the generic message', badLogin.body?.error?.message === 'Invalid credentials');
-
-  const unknown = await api('POST', '/api/auth/login/admin', {
-    body: { email: 'nobody@integration.test', password: ADMIN_PASSWORD },
+  const cashierToken = signAccessToken({
+    id: cashier._id,
+    role: cashier.role,
+    tokenVersion: cashier.tokenVersion ?? 0,
+    tenantId: tenant._id,
   });
-  t('an unknown account gets the SAME message (no enumeration)',
-    unknown.body?.error?.message === badLogin.body?.error?.message);
+  t('an admin session can be established', typeof adminToken === 'string');
+  t('a cashier session can be established', typeof cashierToken === 'string');
 
-  const adminLogin = await api('POST', '/api/auth/login/admin', {
-    body: { email: 'admin@integration.test', password: ADMIN_PASSWORD },
-  });
-  t('the correct password succeeds', adminLogin.status === 200, `status ${adminLogin.status}`);
-  const adminToken = adminLogin.body?.data?.accessToken;
-  t('an access token is issued', typeof adminToken === 'string' && adminToken.length > 20);
-  t('the refresh token is NOT in the body', !JSON.stringify(adminLogin.body).includes('refreshToken'));
-  t('it IS in an httpOnly cookie',
-    /vp_rt=.*HttpOnly/i.test(adminLogin.headers.get('set-cookie') ?? ''));
-  t('no password hash leaks into the response',
-    !JSON.stringify(adminLogin.body).includes('passwordHash'));
-  t('the permission list is returned', Array.isArray(adminLogin.body?.data?.user?.permissions));
-
-  const pinLogin = await api('POST', '/api/auth/login/staff', { body: { pin: CASHIER_PIN } });
-  t('PIN login succeeds', pinLogin.status === 200, `status ${pinLogin.status}`);
-  const cashierToken = pinLogin.body?.data?.accessToken;
-  t('the cashier gets the cashier role', pinLogin.body?.data?.user?.role === 'cashier');
-
-  const adminPinAttempt = await api('POST', '/api/auth/login/staff', { body: { pin: OVERRIDE_PIN } });
-  t('the OVERRIDE PIN cannot be used to log in', adminPinAttempt.status === 401,
-    `status ${adminPinAttempt.status}`);
+  /*
+   * The override PIN must not be a login credential. findActiveByPin restricts
+   * itself to PIN_ROLES, which excludes admin — so an admin's override PIN
+   * cannot start a session even at a linked terminal. Asserted here because it
+   * is a property of the User model, not of the terminal flow.
+   */
+  const overrideAsLogin = await runInTenant(tenant._id, async () =>
+    User.findActiveByPin(OVERRIDE_PIN));
+  t('the OVERRIDE PIN cannot be used to log in', overrideAsLogin === null);
 
   const me = await api('GET', '/api/auth/me', { token: adminToken });
   t('/me works with the token', me.status === 200);
@@ -472,7 +535,12 @@ try {
   const entries = await AuditLog.find({}).sort({ at: 1 });
   const actions = entries.map((e) => e.action);
 
-  t('a successful login was recorded', actions.includes('auth.login.success'));
+  /*
+   * No successful-login entry is expected here any more: this suite takes its
+   * sessions directly rather than signing in, because Google and the terminal
+   * device flow are covered end to end by onboarding-flow.test.mjs — which
+   * asserts the audit entries those paths write.
+   */
   t('a failed login was recorded', actions.includes('auth.login.failure'));
   t('the order creation was recorded', actions.includes('order.create'));
   t('the payment was recorded', actions.includes('order.pay'));
@@ -497,6 +565,7 @@ try {
     mutationBlocked = true;
   }
   t('audit entries cannot be edited', mutationBlocked);
+ });
 } finally {
   await new Promise((r) => server.close(r));
   await wipe();

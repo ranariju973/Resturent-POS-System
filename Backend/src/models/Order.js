@@ -27,6 +27,7 @@ import {
   DISCOUNT_TYPE_VALUES,
 } from '../constants/enums.js';
 import { minorField, lineTotalMinor, percentOf, sumMinor } from '../utils/money.js';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const orderLineSchema = new mongoose.Schema(
   {
@@ -180,8 +181,40 @@ orderSchema.virtual('id').get(function idGetter() {
   return this._id?.toHexString?.() ?? this._id;
 });
 
+/*
+ * Every unique constraint below is declared through the plugin so it is scoped
+ * per restaurant. invoiceTokenHash is the deliberate exception — see its note.
+ */
+orderSchema.plugin(tenantScoped, {
+  unique: [
+    /*
+     * Sparse because every order predating this feature has null, and a plain
+     * unique index would reject the second one. Unique because the invoice
+     * number is what a customer, a receipt and a support query all point at.
+     *
+     * Per-restaurant: order numbers restart at 1 each service day FOR EACH
+     * restaurant (see Counter.js), so two venues both issue INV-20260806-0001
+     * on the same day. A global index would let the first one written take the
+     * number and reject the second restaurant's genuine order.
+     */
+    { fields: { invoiceNo: 1 }, options: { sparse: true } },
+
+    /*
+     * One open order per table at a time — enforced by the database, not by a
+     * check-then-write in a controller that two requests can interleave
+     * through.
+     */
+    {
+      fields: { table: 1 },
+      options: {
+        partialFilterExpression: { status: ORDER_STATUS.OPEN, table: { $type: 'objectId' } },
+      },
+    },
+  ],
+});
+
 // Dashboard and reports both scan by status over a date window.
-orderSchema.index({ status: 1, createdAt: -1 });
+orderSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
 /**
  * Every revenue figure in reportController and dashboardController matches
  * { status: 'paid', paidAt: { $gte, $lt } } — takings, P&L, byHour, topItems.
@@ -189,28 +222,35 @@ orderSchema.index({ status: 1, createdAt: -1 });
  * without this one those queries seek on status and then filter the date range
  * in memory, reading every paid order ever taken to answer "today".
  */
-orderSchema.index({ status: 1, paidAt: -1 });
+orderSchema.index({ tenantId: 1, status: 1, paidAt: -1 });
 // Multikey index over the line items, so "has this menu item ever been
 // ordered?" is a lookup rather than a scan of every order ever taken. The
 // purge check depends on it; without it that check gets slower every service.
-orderSchema.index({ 'items.menuItem': 1 });
-orderSchema.index({ createdAt: -1 });
-orderSchema.index({ createdBy: 1, createdAt: -1 });
+orderSchema.index({ tenantId: 1, 'items.menuItem': 1 });
+orderSchema.index({ tenantId: 1, createdAt: -1 });
+orderSchema.index({ tenantId: 1, createdBy: 1, createdAt: -1 });
+
 /**
- * Sparse because every order predating this feature has null, and a plain
- * unique index would reject the second one. Unique because the invoice number
- * is what a customer, a receipt and a support query all point at.
+ * The public lookup key, and the ONE index here that stays GLOBAL.
+ *
+ * A customer opening a receipt link has no session and no tenant — the 192-bit
+ * token in the URL is what identifies both the order and the restaurant it
+ * belongs to. Scoping this per tenant would require knowing the tenant before
+ * the lookup, which is precisely what the lookup is for.
+ *
+ * Safe to keep global because the value is 192 bits of CSPRNG output hashed
+ * with a server-side pepper: it is unguessable, so uniqueness across the whole
+ * deployment costs nothing and collisions are not a practical concern. The
+ * controller re-enters the resolved tenant immediately afterwards.
  */
-orderSchema.index({ invoiceNo: 1 }, { unique: true, sparse: true });
-/** The public lookup key. Indexed so an anonymous request is O(1), not a scan. */
-orderSchema.index({ invoiceTokenHash: 1 }, { unique: true, sparse: true });
-// One open order per table at a time — enforced by the database, not by a
-// check-then-write in a controller that two requests can interleave through.
 orderSchema.index(
-  { table: 1 },
+  { invoiceTokenHash: 1 },
   {
     unique: true,
-    partialFilterExpression: { status: ORDER_STATUS.OPEN, table: { $type: 'objectId' } },
+    // Partial, not sparse: an order that has not been paid carries an explicit
+    // null here, and `sparse` only skips a field that is absent — so every
+    // unpaid order would otherwise collide with every other unpaid order.
+    partialFilterExpression: { invoiceTokenHash: { $type: 'string' } },
   },
 );
 

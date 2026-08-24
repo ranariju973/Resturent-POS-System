@@ -16,6 +16,7 @@
  */
 import mongoose from 'mongoose';
 import { ATTENDANCE_STATUS_VALUES } from '../constants/enums.js';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const attendanceSchema = new mongoose.Schema(
   {
@@ -87,14 +88,16 @@ attendanceSchema.pre('validate', function normaliseDay(next) {
  * This index also serves "one employee across a month" as a prefix range scan,
  * so no separate { employee: 1 } index is needed.
  */
-attendanceSchema.index({ employee: 1, date: 1 }, { unique: true });
+attendanceSchema.plugin(tenantScoped, {
+  unique: [{ fields: { employee: 1, date: 1 } }],
+});
 
 /**
  * The other direction: "everyone, for this month" — the payroll aggregation
  * and the Attendance tab. Date-leading, because both of those start from a
  * range of days and fan out to employees.
  */
-attendanceSchema.index({ date: 1, employee: 1 });
+attendanceSchema.index({ tenantId: 1, date: 1, employee: 1 });
 
 export const Attendance = mongoose.model('Attendance', attendanceSchema);
 

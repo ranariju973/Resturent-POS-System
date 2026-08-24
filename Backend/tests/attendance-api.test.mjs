@@ -98,10 +98,12 @@ console.log('\n--- a day means a day ---');
 // index cannot see as duplicates — and a day that pays twice.
 t('writes are normalised to UTC midnight', /setUTCHours\(0, 0, 0, 0\)/.test(model));
 t('the normaliser runs before validation', /pre\('validate'/.test(model));
+// Declared through the tenantScoped plugin, so the key is
+// {tenantId, employee, date} — two restaurants may each mark the same day.
 t('one record per employee per day, enforced by the database',
-  /\{ employee: 1, date: 1 \}, \{ unique: true \}/.test(model));
+  /unique:\s*\[\{ fields: \{ employee: 1, date: 1 \} \}\]/.test(model));
 t('a date-leading index serves the whole-month reads',
-  /\{ date: 1, employee: 1 \}/.test(model));
+  /\{ tenantId: 1, date: 1, employee: 1 \}/.test(model));
 t('who marked it is part of the record, since it decides a wage',
   /markedBy[\s\S]{0,160}required:/.test(model));
 
@@ -109,7 +111,18 @@ console.log('\n--- marking is idempotent ---');
 // An admin who re-submits the morning must overwrite it, not double it.
 t('the day is written in one bulkWrite', /Attendance\.bulkWrite/.test(ctl));
 t('each entry is an upsert, not an insert', /upsert: true/.test(ctl));
-t('keyed on employee and day', /filter: \{ employee: entry\.employee, date: day \}/.test(ctl));
+t('keyed on employee and day', /filter: \{ tenantId, employee: entry\.employee, date: day \}/.test(ctl));
+/*
+ * bulkWrite is the one write Mongoose runs no query middleware on, so the
+ * tenantScoped plugin cannot filter or stamp it. Both halves must be explicit:
+ * without it in the filter an upsert could overwrite another restaurant's row
+ * for the same employee and date; without it in $setOnInsert a new record
+ * would belong to no restaurant.
+ */
+t('the bulkWrite filter is scoped to the restaurant by hand',
+  /filter: \{ tenantId,/.test(ctl));
+t('and an inserted row is stamped with it',
+  /\$setOnInsert: \{ tenantId,/.test(ctl));
 t('it is not a loop of saves', !/for \([\s\S]{0,120}await .*\.save\(\)/.test(ctl));
 
 console.log('\n--- a batch cannot mint attendance for arbitrary ids ---');

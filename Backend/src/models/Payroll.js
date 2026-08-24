@@ -26,6 +26,7 @@
 import mongoose from 'mongoose';
 import { PAYROLL_STATUS, PAYROLL_STATUS_VALUES } from '../constants/enums.js';
 import { minorField } from '../utils/money.js';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const payrollSchema = new mongoose.Schema(
   {
@@ -103,10 +104,12 @@ payrollSchema.virtual('id').get(function idGetter() {
  * This is what makes "mark paid" safe to click twice: the second write loses
  * against the index rather than creating a second payment for the same month.
  */
-payrollSchema.index({ month: 1, employee: 1 }, { unique: true });
+payrollSchema.plugin(tenantScoped, {
+  unique: [{ fields: { month: 1, employee: 1 } }],
+});
 
 /** One employee's pay history, most recent first. */
-payrollSchema.index({ employee: 1, month: -1 });
+payrollSchema.index({ tenantId: 1, employee: 1, month: -1 });
 
 export const Payroll = mongoose.model('Payroll', payrollSchema);
 

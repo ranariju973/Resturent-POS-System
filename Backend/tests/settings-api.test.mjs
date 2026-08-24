@@ -75,29 +75,61 @@ t('no params accepted', ok(printerSettingsQuerySchema, {}));
 // Declared rather than exempted, so a stray param is a 400 instead of ignored.
 t('a stray query param is refused', !ok(printerSettingsQuerySchema, { debug: '1' }));
 
-console.log('\n--- a second settings document is impossible ---');
-t('the id is a fixed constant', /PRINTER_SETTINGS_ID = 'printer'/.test(model));
-t('and it is the schema _id', /_id: \{ type: String, default: PRINTER_SETTINGS_ID \}/.test(model));
-// The primary index refuses a duplicate; no extra unique index is needed.
-t('the write is an upsert on that id',
-  /findByIdAndUpdate\(\s*PRINTER_SETTINGS_ID/.test(ctl) && /upsert: true/.test(ctl));
+console.log('\n--- a second settings document per restaurant is impossible ---');
+/*
+ * This used to be guaranteed by a fixed `_id: 'printer'`, which made a second
+ * document impossible for the WHOLE DEPLOYMENT — correct with one restaurant,
+ * and "only the first restaurant may have settings" with many. The guarantee
+ * now takes the form it should: one document per tenant, enforced by a unique
+ * index on tenantId that the plugin declares.
+ */
+t('uniqueness is declared on the tenant, not a fixed id',
+  /plugin\(tenantScoped, \{\s*unique: \[\{ fields: \{\} \}\]/.test(model));
+t('the fixed-id constant is gone', !/PRINTER_SETTINGS_ID/.test(model));
+t('the write is an upsert the plugin scopes to one restaurant',
+  /findOneAndUpdate\(\s*\{\}/.test(ctl) && /upsert: true/.test(ctl));
 
 console.log('\n--- an unconfigured restaurant still works ---');
 t('load() returns defaults rather than null', /statics\.load/.test(model));
 t('and it does not write on a read', !/\.save\(\)/.test(model));
 t('the GET never 404s', !/notFound/.test(ctl));
 
-console.log('\n--- a blank field falls back to the built-in name ---');
-// The empty-string defaults are what make `||` correct here.
-t('every string defaults to empty', (model.match(/default: ''/g) ?? []).length >= 5);
-t('the controller resolves the fallback',
-  /businessName \|\| RESTAURANT\.name/.test(ctl) && /footerLine \|\| RESTAURANT\.tagline/.test(ctl));
-t('the public invoice resolves the same chain',
-  /businessName \|\| RESTAURANT\.name/.test(strip(read('src/controllers/invoiceController.js'))));
+console.log('\n--- receipt identity comes from the restaurant, not a constant ---');
+/*
+ * Identity — name, address, GST number, footer — moved to the Tenant document.
+ * It used to live on this model with a hardcoded RESTAURANT constant behind
+ * it, so two places described one fact and a single deployment could only ever
+ * name one restaurant.
+ */
+const tenantModel = strip(read('src/models/Tenant.js'));
+const invoiceCtl = strip(read('src/controllers/invoiceController.js'));
+
+t('the hardcoded restaurant constant is gone from config',
+  !/export const RESTAURANT/.test(strip(read('src/config/pos.js'))));
+t('identity fields live on the Tenant',
+  /gstNumber/.test(tenantModel) && /footerLine/.test(tenantModel) && /tagline/.test(tenantModel));
+t('the printer model no longer stores identity',
+  !/businessName/.test(model) && !/gstNumber/.test(model));
+t('the settings controller reads identity from the Tenant',
+  /Tenant\.findById/.test(ctl) && /businessName: tenant\?\.name/.test(ctl));
+t('the public invoice resolves the same source',
+  /name: tenant\?\.name/.test(invoiceCtl));
+// The empty-string defaults are what make `||` correct on the tenant fields.
+t('every identity string defaults to empty',
+  (tenantModel.match(/default: ''/g) ?? []).length >= 4);
 
 console.log('\n--- the cache cannot serve a stale receipt header ---');
 t('reads are memoised', /loadCachedSettings/.test(model));
 t('and a save drops the memo', /invalidateSettingsCache\(\)/.test(ctl));
+/*
+ * The memo used to be a module-scope `let cached` — one slot for the whole
+ * process. With many restaurants that is a cross-tenant leak: the first
+ * receipt rendered would populate it and every other restaurant would print
+ * that one's configuration for the next minute. Going through the cache's
+ * key() partitions the entry by the tenant in context.
+ */
+t('the memo is keyed per restaurant, not a module-scope variable',
+  /key\('settings'/.test(model) && !/^let cached/m.test(model));
 
 console.log('\n--- permission ---');
 t('settings:manage exists', PERMISSIONS.SETTINGS_MANAGE === 'settings:manage');

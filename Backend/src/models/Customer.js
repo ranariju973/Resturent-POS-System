@@ -19,6 +19,7 @@
  * out of log storage.
  */
 import mongoose from 'mongoose';
+import { tenantScoped } from './plugins/tenantScoped.js';
 
 const customerSchema = new mongoose.Schema(
   {
@@ -43,7 +44,14 @@ const customerSchema = new mongoose.Schema(
       match: [/^[+]?[\d\s()-]{6,24}$/, 'Invalid phone number'],
     },
 
-    phoneNormalized: { type: String, index: { unique: true, sparse: true }, select: false },
+    /*
+     * The de-duplication key. Its unique index is declared through the
+     * tenantScoped plugin as {tenantId, phoneNormalized} rather than inline:
+     * one person may eat at two restaurants on the same deployment, and a
+     * global unique index would let whichever saw them first stop the other
+     * from ever recording them.
+     */
+    phoneNormalized: { type: String, select: false },
 
     email: {
       type: String,
@@ -84,8 +92,12 @@ customerSchema.virtual('id').get(function idGetter() {
   return this._id?.toHexString?.() ?? this._id;
 });
 
-customerSchema.index({ name: 'text' });
-customerSchema.index({ isActive: 1, lastVisitAt: -1 });
+customerSchema.plugin(tenantScoped, {
+  unique: [{ fields: { phoneNormalized: 1 }, options: { sparse: true } }],
+});
+
+customerSchema.index({ tenantId: 1, name: 'text' });
+customerSchema.index({ tenantId: 1, isActive: 1, lastVisitAt: -1 });
 
 /** Digits only, so formatting differences cannot create duplicate records. */
 export const normalizePhone = (phone) => String(phone ?? '').replace(/\D/g, '');

@@ -45,12 +45,24 @@ const STREAM_TOKEN_TTL_SECONDS = 60;
  * @param {{id: any, role: string, tokenVersion?: number}} user
  * @returns {string}
  */
+/**
+ * The restaurant claim.
+ *
+ * Empty string, not omitted, when the account has no restaurant yet — a Google
+ * user part-way through onboarding. An absent claim and an empty one would
+ * otherwise be indistinguishable from a token minted before this field
+ * existed, and requireAuth compares this against the database on every
+ * request.
+ */
+const tenantClaim = (user) => (user.tenantId ? String(user.tenantId) : '');
+
 export function signAccessToken(user) {
   return jwt.sign(
     {
       sub: String(user.id ?? user._id),
       role: user.role,
       tv: user.tokenVersion ?? 0,
+      tid: tenantClaim(user),
       typ: TOKEN_TYPE.ACCESS,
     },
     env.JWT_ACCESS_SECRET,
@@ -166,6 +178,7 @@ export function signStreamToken(user) {
     {
       sub: String(user.id ?? user._id),
       tv: user.tokenVersion ?? 0,
+      tid: tenantClaim(user),
       typ: TOKEN_TYPE.STREAM,
     },
     env.JWT_ACCESS_SECRET,
@@ -247,6 +260,49 @@ export function clearRefreshCookieOptions() {
   };
 }
 
+// --- Device cookie ---------------------------------------------------------
+
+export const DEVICE_COOKIE = 'vp_dev';
+
+/**
+ * How long a terminal stays linked.
+ *
+ * A year, because re-linking requires an owner to be physically present with
+ * their Google account, and making staff wait for that mid-service is the kind
+ * of friction that gets a POS replaced. The lifetime is defensible because of
+ * what the token IS: it names a restaurant, it grants no session, and the PIN
+ * plus its lockout still stand in front of any access (see models/Device.js).
+ */
+const DEVICE_COOKIE_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * Cookie options for the terminal binding.
+ *
+ * Same attributes and the same reasoning as the refresh cookie — httpOnly so
+ * XSS cannot read it, path-scoped to the auth routes because that is the only
+ * place it is read, and the sameSite rule that a split Vercel/Render
+ * deployment forces.
+ */
+export function deviceCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: env.isProd,
+    sameSite: REFRESH_COOKIE_SAME_SITE,
+    path: '/api/auth',
+    maxAge: DEVICE_COOKIE_MAX_AGE_MS,
+  };
+}
+
+/** Matching options for clearing — a cookie clears only on an exact match. */
+export function clearDeviceCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: env.isProd,
+    sameSite: REFRESH_COOKIE_SAME_SITE,
+    path: '/api/auth',
+  };
+}
+
 export default {
   signAccessToken,
   signRefreshToken,
@@ -254,6 +310,9 @@ export default {
   verifyRefreshToken,
   refreshCookieOptions,
   clearRefreshCookieOptions,
+  deviceCookieOptions,
+  clearDeviceCookieOptions,
   REFRESH_COOKIE,
+  DEVICE_COOKIE,
   TOKEN_TYPE,
 };

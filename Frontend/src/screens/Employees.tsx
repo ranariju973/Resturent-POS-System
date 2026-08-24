@@ -97,6 +97,49 @@ export function Employees() {
           }
         />
 
+        {/*
+          * Staff PINs do not work until this machine is linked to the
+          * restaurant, and nothing else on screen would explain why. It sits
+          * here rather than in Settings because this is where PINs are set —
+          * the moment someone wonders why the one they just issued is refused.
+          */}
+        {!state.terminalLinked ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              flexWrap: 'wrap',
+              padding: '13px 16px',
+              borderRadius: 12,
+              background: '#faf6ee',
+              border: '1px solid #f0e4c8',
+            }}
+          >
+            <Icon icon="lucide:monitor-smartphone" size={18} />
+            <span
+              style={{
+                flex: 1,
+                minWidth: 220,
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#8a6a24',
+                lineHeight: 1.5,
+              }}
+            >
+              This terminal isn’t linked yet, so staff can’t sign in with a PIN on it.
+            </span>
+            <button
+              type="button"
+              className="press hv-primary"
+              onClick={actions.openTerminalSetup}
+              style={primaryPill}
+            >
+              <Icon icon="lucide:link" size={15} /> Set up terminal
+            </button>
+          </div>
+        ) : null}
+
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {TABS.map((tab) => (
             <FilterPill

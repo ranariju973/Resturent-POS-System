@@ -40,14 +40,33 @@
  * nobody asked for. req.authUser has exactly one consumer (GET /api/auth/me →
  * publicUser), which reads plain fields and works fine with a lean object.
  */
-import { key, remember, delPrefix } from './cache.js';
+import { remember, delPrefix, GLOBAL_TENANT } from './cache.js';
 
 const TTL_MS = 30_000;
 
-const USERS_PREFIX = key('user');
+/**
+ * ── Why this cache is NOT keyed by restaurant ──────────────────────────────
+ * Every other cache goes through cache.key(), which prefixes the tenant from
+ * the request context. This one deliberately does not, for a reason that is
+ * ordering, not preference: it is read by requireAuth to LOAD the user, and
+ * the user record is what tells us which restaurant the request belongs to.
+ * There is no tenant in context yet at that moment.
+ *
+ * Keying it through cache.key() would therefore have silently produced
+ * `pos:global:...` on every read anyway — the correct key, arrived at by
+ * accident, and one that would have started varying the day anything else
+ * called this from inside a request. Writing the prefix explicitly makes the
+ * intent inspectable instead.
+ *
+ * Safe because the key is a user's ObjectId, which is unique across the whole
+ * deployment: two restaurants cannot collide on one, so there is nothing for a
+ * tenant prefix to separate.
+ */
+const userKey = (id) => `pos:${GLOBAL_TENANT}:user:${id}`;
+const USERS_PREFIX = `pos:${GLOBAL_TENANT}:user`;
 
 /** Read-through by id. `compute` must return a lean object or null. */
-export const rememberUser = (id, compute) => remember(key('user', String(id)), TTL_MS, compute);
+export const rememberUser = (id, compute) => remember(userKey(String(id)), TTL_MS, compute);
 
 /**
  * Drop every cached user. Called from the User model's write hooks, so it

@@ -165,8 +165,9 @@ t('no factor pays more than a full day',
 console.log('\n--- a paid month is frozen ---');
 const ctl = strip(fs.readFileSync(path.join(ROOT, 'src/controllers/payrollController.js'), 'utf8'));
 const model = strip(fs.readFileSync(path.join(ROOT, 'src/models/Payroll.js'), 'utf8'));
+// Declared through the tenantScoped plugin — {tenantId, month, employee}.
 t('one payroll row per employee per month, enforced by the database',
-  /\{ month: 1, employee: 1 \}, \{ unique: true \}/.test(model));
+  /unique:\s*\[\{ fields: \{ month: 1, employee: 1 \} \}\]/.test(model));
 t('a paid row is served from its snapshot, not recomputed',
   /PAYROLL_STATUS\.PAID/.test(ctl) && /snapshot/.test(ctl));
 t('paying freezes the derived figures', /snapshot:/.test(ctl));

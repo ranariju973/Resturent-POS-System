@@ -212,6 +212,14 @@ export const AUDIT_ACTION = Object.freeze({
 
   // Receipt layout, printers and the business details printed on a bill.
   SETTINGS_UPDATE: 'settings.update',
+
+  // A new restaurant was created by someone signing in with Google.
+  TENANT_CREATE: 'tenant.create',
+
+  // A terminal was linked to a restaurant, or unlinked from it. Both matter:
+  // a linked device is what lets staff PINs be matched at all.
+  DEVICE_LINK: 'device.link',
+  DEVICE_UNLINK: 'device.unlink',
 });
 
 export const AUDIT_ACTION_VALUES = Object.freeze(Object.values(AUDIT_ACTION));

@@ -6,7 +6,9 @@
  * with "Schema hasn't been registered". Import this once at boot and the
  * problem cannot happen.
  */
+export { Tenant, slugify } from './Tenant.js';
 export { User } from './User.js';
+export { Device, mintDeviceToken, hashDeviceToken } from './Device.js';
 export { RefreshToken, hashToken } from './RefreshToken.js';
 export { Category } from './Category.js';
 export { MenuItem } from './MenuItem.js';

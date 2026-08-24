@@ -1,32 +1,37 @@
 /**
- * Receipt configuration — one document, for the whole restaurant.
+ * Receipt hardware configuration — one document per restaurant.
  *
- * ── Why a fixed `_id` and not a `key` field ────────────────────────────────
- * A second settings document must be impossible, not merely discouraged. With
- * a constant primary key the database enforces that for free: a second insert
- * is a duplicate-key error on the index every collection already has. A `key`
- * field with a unique index would achieve the same thing while needing a
- * migration and an extra index to do it. `Counter.js` sets the precedent.
+ * ── What moved out of here ─────────────────────────────────────────────────
+ * This used to hold the business identity too — name, address, phone, GST
+ * number, footer — with a `RESTAURANT` constant in config/pos.js as the
+ * fallback. Two places described one fact, and the receipt renderer had to
+ * pick between them.
  *
- * ── Why every string defaults to '' ────────────────────────────────────────
- * The receipt header falls back to the `RESTAURANT` constant in config/pos.js
- * when a field is blank. That fallback is written as `settings.businessName ||
- * RESTAURANT.name`, which only behaves if an unset field is falsy — so an
- * admin who clears the box gets the built-in name back rather than a receipt
- * with no header at all.
+ * Identity now lives on the Tenant document, which is where a restaurant's
+ * name belongs once there is more than one restaurant. What stays here is
+ * strictly HARDWARE: paper width, copy counts, and which named printer gets
+ * which document. Those vary per venue and have nothing to do with who the
+ * business is.
+ *
+ * ── Why the fixed `_id` had to go ──────────────────────────────────────────
+ * A constant primary key made a second settings document impossible, which
+ * was exactly right when there was one restaurant. With many, "impossible"
+ * becomes "only the first restaurant may have settings". The guarantee is
+ * preserved in the form it should now take — one document per TENANT — by a
+ * unique index on `tenantId`, which the tenantScoped plugin declares. A second
+ * insert for the same restaurant is still a duplicate-key error; the database
+ * still enforces it; only the scope changed.
  */
 import mongoose from 'mongoose';
-
-/** The only id this collection ever holds. */
-export const PRINTER_SETTINGS_ID = 'printer';
+import { tenantScoped } from './plugins/tenantScoped.js';
+import { getTenantId } from '../utils/tenantContext.js';
+import { key, remember, del } from '../utils/cache.js';
 
 /** Paper widths a thermal printer actually comes in. */
 export const PAPER_WIDTHS = Object.freeze([58, 80]);
 
 const printerSettingsSchema = new mongoose.Schema(
   {
-    _id: { type: String, default: PRINTER_SETTINGS_ID },
-
     /** Millimetres. Decides the column budget: 58mm = 32 chars, 80mm = 48. */
     paperWidth: { type: Number, enum: PAPER_WIDTHS, default: 80 },
 
@@ -39,21 +44,14 @@ const printerSettingsSchema = new mongoose.Schema(
      */
     kotPrinterName: { type: String, trim: true, maxlength: 120, default: '' },
     billPrinterName: { type: String, trim: true, maxlength: 120, default: '' },
-
-    // Printed at the top of a customer bill. Never on a kitchen ticket — a
-    // KOT that spends three lines on a GST number spends them every service.
-    businessName: { type: String, trim: true, maxlength: 80, default: '' },
-    businessAddress: { type: String, trim: true, maxlength: 200, default: '' },
-    businessPhone: { type: String, trim: true, maxlength: 24, default: '' },
-    gstNumber: { type: String, trim: true, maxlength: 20, default: '' },
-    footerLine: { type: String, trim: true, maxlength: 120, default: '' },
   },
   {
     timestamps: true,
     versionKey: false,
     toJSON: {
       transform(_doc, ret) {
-        // The client has no use for a primary key it can never vary.
+        // The client configures its own printers; the row's identity is not
+        // something it can vary.
         delete ret._id;
         return ret;
       },
@@ -62,49 +60,67 @@ const printerSettingsSchema = new mongoose.Schema(
 );
 
 /**
- * The settings, or the defaults when nothing has been saved yet.
+ * One settings document per restaurant, enforced by the database rather than
+ * by a check-then-write that two concurrent saves could interleave through.
+ */
+printerSettingsSchema.plugin(tenantScoped, {
+  unique: [{ fields: {} }],
+});
+
+/**
+ * This restaurant's settings, or the defaults when nothing has been saved.
  *
- * Never returns null. A fresh install must behave exactly like a configured
+ * Never returns null. A fresh restaurant must behave exactly like a configured
  * one, or every caller grows a second branch for "not set up yet" — and the
  * settings screen would have to handle a 404 that means "fine, use defaults".
  */
 printerSettingsSchema.statics.load = async function load() {
-  const found = await this.findById(PRINTER_SETTINGS_ID);
+  const found = await this.findOne({});
   if (found) return found;
-  // Not persisted — a read must not write. The defaults come from the schema
-  // itself so there is exactly one place they are declared.
-  return new this({ _id: PRINTER_SETTINGS_ID });
+
+  /*
+   * Not persisted — a read must not write. The defaults come from the schema
+   * itself so there is exactly one place they are declared.
+   *
+   * tenantId is set explicitly because this document is never saved, so the
+   * plugin's pre-validate hook (which would otherwise stamp it) never runs.
+   * Without it the caller gets an object whose tenant is undefined.
+   */
+  return new this({ tenantId: getTenantId() });
 };
 
 export const PrinterSettings = mongoose.model('PrinterSettings', printerSettingsSchema);
 
+/** How long a settings read is reused. See loadCachedSettings. */
+const SETTINGS_TTL_MS = 60_000;
+
+/** The cache key for the CURRENT restaurant. */
+const settingsKey = () => key('settings', 'printer');
+
 /**
- * The same settings, memoised for a minute.
+ * This restaurant's settings, memoised for a minute.
  *
  * The public invoice route is unauthenticated and rate-limited at 120/hour per
  * IP; a customer opening a receipt should not cost a settings query on top of
  * the order lookup. A minute is short enough that an admin saving a new
- * address sees it on the next receipt, and long enough that a burst of opens
- * is one read.
+ * printer configuration sees it on the next receipt, and long enough that a
+ * burst of opens is one read.
  *
- * Deliberately a plain module-scope memo rather than a cache library: it is
- * one document, and the invalidation is one call from one writer.
+ * ── Why this is no longer a module-scope variable ──────────────────────────
+ * It used to be `let cached` — one slot for the whole process. With one
+ * restaurant that was simply a memo. With many it is a cross-tenant leak of
+ * the worst kind: whichever restaurant's receipt was rendered first would
+ * populate the slot, and every other restaurant's receipts would print that
+ * one's configuration for the next minute. Going through `key()` partitions
+ * the entry by the tenant in context, so each restaurant memoises its own.
  */
-let cached = null;
-let cachedAt = 0;
-const TTL_MS = 60_000;
-
 export async function loadCachedSettings() {
-  if (cached && Date.now() - cachedAt < TTL_MS) return cached;
-  cached = await PrinterSettings.load();
-  cachedAt = Date.now();
-  return cached;
+  return remember(settingsKey(), SETTINGS_TTL_MS, () => PrinterSettings.load());
 }
 
 /** Called by the settings writer, so a save is visible immediately. */
-export function invalidateSettingsCache() {
-  cached = null;
-  cachedAt = 0;
+export async function invalidateSettingsCache() {
+  await del(settingsKey());
 }
 
 export default PrinterSettings;
