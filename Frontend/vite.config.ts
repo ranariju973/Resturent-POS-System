@@ -53,6 +53,22 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      /*
+       * Pinned, and strict about it.
+       *
+       * Google will only issue a credential to an origin registered against
+       * the OAuth client — this project registers http://localhost:8080. Vite
+       * defaults to 5173 and silently walks to 5174, 5175… when a port is
+       * busy, which produces an origin Google refuses and an error that looks
+       * like a broken network rather than a wrong port.
+       *
+       * `strictPort` makes a busy 8080 a loud failure at startup instead of a
+       * quiet move to a port that cannot sign anyone in. The root `npm run
+       * dev` already passed these flags; having them here means running vite
+       * directly from this directory behaves the same way.
+       */
+      port: 8080,
+      strictPort: true,
       proxy: {
         '/api': {
           target,

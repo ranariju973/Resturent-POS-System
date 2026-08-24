@@ -75,6 +75,18 @@ function loadGoogleScript(): Promise<void> {
   return loader;
 }
 
+/**
+ * Why the button is not there.
+ *
+ * Distinguished because the fixes are completely different, and a single
+ * "could not load" message sent someone to check their network when the real
+ * problem was a port number.
+ */
+type Failure =
+  | { kind: 'no-client-id' }
+  | { kind: 'script' }
+  | { kind: 'origin'; origin: string };
+
 export function GoogleButton({
   onCredential,
   disabled = false,
@@ -83,7 +95,7 @@ export function GoogleButton({
   disabled?: boolean;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<Failure | null>(null);
 
   /*
    * The callback in a ref, not a dependency.
@@ -102,7 +114,7 @@ export function GoogleButton({
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 
     if (!clientId) {
-      setFailed(true);
+      setFailed({ kind: 'no-client-id' });
       return undefined;
     }
 
@@ -130,9 +142,27 @@ export function GoogleButton({
           logo_alignment: 'left',
           width: 320,
         });
+
+        /*
+         * Google refuses an unregistered origin, and it does so QUIETLY: the
+         * script loads, initialize() resolves, and renderButton() simply
+         * leaves the container empty while logging to the console. Nobody
+         * reads a POS terminal's console, so the symptom is an invisible
+         * button and no explanation.
+         *
+         * Checking whether anything was actually rendered turns that into a
+         * message naming the origin to register. One frame is enough — the
+         * iframe is inserted synchronously when the origin is accepted.
+         */
+        requestAnimationFrame(() => {
+          if (cancelled || !host.current) return;
+          if (host.current.childElementCount === 0) {
+            setFailed({ kind: 'origin', origin: window.location.origin });
+          }
+        });
       })
       .catch(() => {
-        if (!cancelled) setFailed(true);
+        if (!cancelled) setFailed({ kind: 'script' });
       });
 
     return () => {
@@ -142,18 +172,41 @@ export function GoogleButton({
 
   if (failed) {
     return (
-      <p
+      <div
         style={{
-          margin: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          padding: '12px 14px',
+          borderRadius: 12,
+          background: 'rgba(200,32,20,0.06)',
           fontSize: 13,
           fontWeight: 500,
           color: '#c82014',
           textAlign: 'center',
-          lineHeight: 1.5,
+          lineHeight: 1.55,
         }}
       >
-        Google sign-in could not load. Check this terminal&rsquo;s connection, then reload.
-      </p>
+        {failed.kind === 'no-client-id' ? (
+          <span>
+            Google sign-in is not configured. Set <code>VITE_GOOGLE_CLIENT_ID</code> and restart
+            the app.
+          </span>
+        ) : failed.kind === 'script' ? (
+          <span>
+            Google sign-in could not load. Check this terminal&rsquo;s connection, then reload.
+          </span>
+        ) : (
+          <>
+            <span>Google will not sign in from this address.</span>
+            <span style={{ fontWeight: 600, wordBreak: 'break-all' }}>{failed.origin}</span>
+            <span style={{ color: 'rgba(0,0,0,0.58)', fontWeight: 500 }}>
+              Add it under Authorised JavaScript origins in the Google Cloud console, or open the
+              app on the address that is already registered.
+            </span>
+          </>
+        )}
+      </div>
     );
   }
 
