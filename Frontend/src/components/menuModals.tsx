@@ -245,7 +245,14 @@ export function DeleteModal() {
   if (modal?.kind !== 'del') return null;
 
   const isCategory = modal.delKind === 'cat';
-  const doomed = isCategory ? state.items.filter((i) => i.cat === modal.target).length : 0;
+  /*
+   * `modal.target` is an ID for both kinds — it is what goes into the request
+   * URL. The name is looked up purely for display: keying the modal on a name
+   * meant the delete request carried a name too, which the route's ObjectId
+   * schema rejected with a bare "Validation failed".
+   */
+  const category = isCategory ? state.cats.find((c) => c.id === modal.target) : undefined;
+  const blocking = isCategory ? state.items.filter((i) => i.cat === modal.target).length : 0;
 
   return (
     <ModalOverlay maxWidth={400}>
@@ -274,10 +281,12 @@ export function DeleteModal() {
         }}
       >
         {isCategory
-          ? 'This will remove the category and every item inside it from the POS menu. Are you sure?'
+          ? blocking > 0
+            ? 'A category can only be deleted once it is empty.'
+            : 'This will remove the category from the POS menu. Are you sure?'
           : 'This will remove the item from the POS menu. Are you sure?'}
       </p>
-      {isCategory && doomed > 0 ? (
+      {isCategory && blocking > 0 ? (
         <p
           style={{
             margin: 0,
@@ -290,7 +299,8 @@ export function DeleteModal() {
             lineHeight: 1.45,
           }}
         >
-          “{modal.target}” still has {plural(doomed, 'item')} — they will be deleted too.
+          “{category?.name ?? 'This category'}” still has {plural(blocking, 'item')}. Move or delete
+          them first.
         </p>
       ) : null}
       <ModalActions
@@ -299,6 +309,9 @@ export function DeleteModal() {
         saveLabel="Delete"
         busyLabel="Deleting…"
         busy={state.menuSaving}
+        // The server refuses a non-empty category with a 409, so offering the
+        // button would only produce an error the modal already knows about.
+        saveDisabled={isCategory && blocking > 0}
         destructive
       />
     </ModalOverlay>

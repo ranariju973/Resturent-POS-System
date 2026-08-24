@@ -430,6 +430,7 @@ export function ModalActions({
   destructive = false,
   busy = false,
   busyLabel = 'Saving…',
+  saveDisabled = false,
 }: {
   onCancel: () => void;
   onSave: () => void;
@@ -437,6 +438,12 @@ export function ModalActions({
   destructive?: boolean;
   busy?: boolean;
   busyLabel?: string;
+  /**
+   * Disables save only, leaving cancel live — for a dialog the client already
+   * knows the server will refuse. Distinct from `busy`, which disables both
+   * because a write is in flight.
+   */
+  saveDisabled?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 2 }}>
@@ -453,7 +460,7 @@ export function ModalActions({
         type="button"
         className={`press ${destructive ? 'hv-danger-fill' : 'hv-primary'}`}
         onClick={onSave}
-        disabled={busy}
+        disabled={busy || saveDisabled}
         style={{
           ...(destructive ? deleteButton : saveButton),
           display: 'flex',
@@ -461,6 +468,7 @@ export function ModalActions({
           justifyContent: 'center',
           gap: 8,
           ...(busy ? { opacity: 0.75, cursor: 'default' } : null),
+          ...(saveDisabled && !busy ? { opacity: 0.4, cursor: 'not-allowed' } : null),
         }}
       >
         {busy ? <Spinner size={14} /> : null}
