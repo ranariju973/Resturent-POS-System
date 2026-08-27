@@ -73,9 +73,24 @@ async function parse<T>(res: Response): Promise<T> {
   try {
     body = (await res.json()) as Envelope<T>;
   } catch {
-    // A non-JSON body means something upstream of the API answered — a proxy,
-    // a gateway, or nothing at all.
-    throw new ApiError(res.status, res.ok ? 'Unreadable response' : 'Service unavailable');
+    /*
+     * A non-JSON body means something upstream of the API answered — a proxy,
+     * a gateway, or nothing at all.
+     *
+     * The status is named because it is the only clue left, and the two cases
+     * it separates need different actions. A 413 here is the hosting proxy
+     * refusing a large upload before it ever reached the backend (Vercel caps
+     * a request body well below the old 5MB image limit); a 502/504 is the
+     * backend being asleep or down. Collapsing both to "Service unavailable"
+     * sent people looking at the server for what was a too-large file.
+     */
+    if (res.status === 413) {
+      throw new ApiError(413, 'That file is too large to upload. Try a smaller image.');
+    }
+    throw new ApiError(
+      res.status,
+      res.ok ? 'Unreadable response' : `Service unavailable (HTTP ${res.status})`,
+    );
   }
 
   if (!res.ok || !body.success) {
@@ -109,6 +124,19 @@ export function refreshSession(): Promise<boolean> {
         credentials: 'include', // sends the httpOnly refresh cookie
         headers: { Accept: 'application/json' },
       });
+
+      /*
+       * A 429 is not a dead session.
+       *
+       * The refresh limiter allows 30 attempts per 15 minutes keyed on the
+       * client IP, and behind the Vercel -> Render proxy many terminals share
+       * one. Treating a throttle as "signed out" meant a busy service could
+       * log every till out at once, which is the worst possible moment for it.
+       *
+       * The token is left exactly as it was so the caller can retry. Only an
+       * actual rejection clears it.
+       */
+      if (res.status === 429) return false;
 
       if (!res.ok) {
         accessToken = null;

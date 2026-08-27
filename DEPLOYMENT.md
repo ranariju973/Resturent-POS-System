@@ -44,7 +44,7 @@ the problem. Empty means "call my own origin", which lands on the rewrite.
 
 | Variable | Notes |
 |---|---|
-| `NODE_ENV` | `production` |
+| `NODE_ENV` | `production` — **not optional**, see below |
 | `MONGO_URI` | Atlas connection string, replica set |
 | `JWT_ACCESS_SECRET` | 32+ chars |
 | `JWT_REFRESH_SECRET` | 32+ chars |
@@ -55,6 +55,7 @@ the problem. Empty means "call my own origin", which lands on the rewrite.
 | `CORS_ORIGIN` | `https://pos-resturent-system.vercel.app` |
 | `PUBLIC_APP_URL` | `https://pos-resturent-system.vercel.app` |
 | `CLOUDINARY_*` | cloud name, api key, api secret |
+| `UPLOAD_MAX_BYTES` | Optional. Defaults to `4194304` (4MB) — do not raise it, see below |
 
 Every secret must be a **different** value; the server refuses to start if any
 two match. Generate each with:
@@ -66,6 +67,37 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 The server also refuses to start if a required variable is missing, rather than
 booting half-configured. On Render that shows up as a crash loop with the
 reason printed in the logs — read them before assuming the deploy is broken.
+
+#### `NODE_ENV=production` is what keeps people signed in
+
+The refresh and device cookies take their `Secure` and `SameSite` attributes
+from `NODE_ENV` (see `src/utils/jwt.js`). Under any other value they are issued
+as `Secure: false; SameSite=Strict`, which a browser will not send back to an
+https site. The result is not an error anywhere — sign-in appears to work, and
+then **every page refresh silently logs the user out**, because
+`POST /api/auth/refresh` never receives the cookie.
+
+The server now refuses to boot in that combination (a development `NODE_ENV`
+with an all-https `CORS_ORIGIN`) rather than letting it fail silently. If Render
+crash-loops with that message, the fix is `NODE_ENV=production`, not a change to
+`CORS_ORIGIN`.
+
+Locally the opposite applies: keep `NODE_ENV=development` and point
+`CORS_ORIGIN` at `http://localhost:8080`, so the Vite proxy keeps the cookie
+first-party.
+
+#### Why the image limit is 4MB and not larger
+
+Menu image uploads reach the backend through the Vercel rewrite above, and that
+proxy caps a request body at roughly 4.5MB. A file over the cap is rejected by
+Vercel before it ever reaches Render, and Vercel answers with its own page
+rather than this API's JSON envelope — so the client cannot parse a reason and
+the admin sees an unexplained failure.
+
+`UPLOAD_MAX_BYTES` therefore sits *below* the proxy's ceiling, so multer refuses
+an oversized image first and returns a clear "Image must be smaller than 4MB".
+Raising it past ~4.5MB reintroduces the silent failure; serving larger uploads
+means bypassing the proxy, not changing this number.
 
 ### Vercel (frontend)
 

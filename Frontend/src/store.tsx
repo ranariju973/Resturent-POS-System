@@ -1056,6 +1056,19 @@ function usePosState() {
             onboarding: null,
             authPending: false,
             loginError: '',
+            /*
+             * The SESSION decides whether this terminal is linked, not the
+             * device cookie.
+             *
+             * The server returns a terminal only when the device belongs to
+             * the restaurant that just signed in. A cookie left behind by a
+             * different owner on a shared browser therefore arrives as null,
+             * which correctly reads as "not linked yet" and surfaces the setup
+             * prompt — instead of showing this owner the previous one's
+             * terminal and hiding the only way to fix it.
+             */
+            terminal: session.terminal,
+            terminalLinked: session.terminal !== null,
             ...landingScreen(session.user),
           });
         } catch (err) {
@@ -1089,6 +1102,24 @@ function usePosState() {
             restaurantName: '',
             authPending: false,
             loginError: '',
+            /*
+             * Onboarding ends at terminal setup, not at the dashboard.
+             *
+             * A restaurant that has just been named has no device by
+             * definition, so staff PINs cannot work on this machine yet —
+             * and nothing on any screen would explain why. The only route to
+             * setup used to be a banner on the Employees screen, which an
+             * owner had no reason to visit and which was hidden anyway
+             * whenever a stale cookie left `terminalLinked` true.
+             *
+             * Offering it here puts the step in front of the one person who
+             * can do it, at the moment they are sitting at the machine.
+             * `closeTerminalSetup` still dismisses it — this is a prompt, not
+             * a wall.
+             */
+            terminalLinked: false,
+            terminalSetup: true,
+            terminalName: 'Terminal 1',
             ...landingScreen(session.user),
           });
         } catch (err) {
@@ -1218,7 +1249,14 @@ function usePosState() {
               onboarding: session.onboarding,
               restaurantName: session.onboarding.suggestedName ?? '',
               authBooting: false,
-              ...terminalState,
+              /*
+               * An account with no restaurant owns no terminal, whatever the
+               * cookie says. Reporting one here would let a device left behind
+               * by a previous owner suppress the setup prompt this account is
+               * about to need.
+               */
+              terminal: null,
+              terminalLinked: false,
             });
           }
 
@@ -1227,7 +1265,19 @@ function usePosState() {
             restaurant: session.restaurant,
             onboarding: null,
             authBooting: false,
-            ...terminalState,
+            /*
+             * `terminalState` is deliberately NOT spread here.
+             *
+             * It comes from GET /api/auth/terminal, which is unauthenticated
+             * and can only report what the device cookie says — including a
+             * cookie belonging to a different restaurant on a shared browser.
+             * Now that there is a session, the server has already resolved the
+             * terminal against THIS restaurant, and that answer is the only
+             * one that cannot be wrong. The probe still serves the signed-out
+             * branch above, which has no session to check against.
+             */
+            terminal: session.terminal,
+            terminalLinked: session.terminal !== null,
             ...landingScreen(session.user),
           });
         } catch {
@@ -1950,7 +2000,18 @@ function usePosState() {
           });
           flash(`"${name}" updated`);
         } catch (err) {
-          patch({ menuSaving: false, modal: null });
+          /*
+           * The modal deliberately STAYS OPEN.
+           *
+           * It used to close, which threw away the typed name, price,
+           * description and the picked image file. The most common failure
+           * here is an image the server refused as too large — and the fix is
+           * to choose a smaller one, which is impossible if the dialog and
+           * everything in it has just vanished. Re-entering a whole item to
+           * retry is the kind of small cruelty that makes people stop using a
+           * screen.
+           */
+          patch({ menuSaving: false });
           flash(describe(err, 'Could not save the item.'));
         }
       },

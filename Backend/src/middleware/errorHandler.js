@@ -48,7 +48,31 @@ function normalize(err) {
   // Duplicate key. The offending field name is safe to name; the value is not
   // (it may be an email or phone number belonging to someone else).
   if (err?.code === 11000) {
-    const field = Object.keys(err.keyPattern || err.keyValue || {})[0] || 'field';
+    const keys = Object.keys(err.keyPattern || err.keyValue || {});
+
+    /*
+     * Compound indexes need naming by hand.
+     *
+     * Taking keys[0] is right for a single-field index and actively misleading
+     * for a compound one. Every index in this codebase is tenant-first (see
+     * models/plugins/tenantScoped.js), so keys[0] is usually `tenantId` — and
+     * on the menu's {tenantId, category, name} index it reported "A record
+     * with that category already exists" when what the admin actually did was
+     * reuse an item NAME within a category.
+     *
+     * tenantId is dropped unconditionally: it is never something the client
+     * chose, so it can never be the field they need to change.
+     */
+    const meaningful = keys.filter((k) => k !== 'tenantId');
+
+    if (meaningful.includes('category') && meaningful.includes('name')) {
+      return new ApiError(409, 'An item with that name already exists in this category', {
+        code: 'DUPLICATE_KEY',
+        cause: err,
+      });
+    }
+
+    const field = meaningful[0] || keys[0] || 'field';
     return new ApiError(409, `A record with that ${field} already exists`, {
       code: 'DUPLICATE_KEY',
       cause: err,
