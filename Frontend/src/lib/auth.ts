@@ -212,16 +212,49 @@ export async function linkTerminal(name: string): Promise<Terminal> {
  * Returns null when there is no valid session — the normal case for a first
  * visit, so it must not surface as an error.
  */
-export async function restoreSession(): Promise<Session | null> {
-  const ok = await refreshSession();
-  if (!ok) return null;
+let restoreInFlight: Promise<Session | null> | null = null;
 
-  try {
-    const data = await api<LoginResponse>('/api/auth/me', { skipRetry: true });
-    return toSession(data);
-  } catch {
-    return null;
-  }
+export function restoreSession(): Promise<Session | null> {
+  /*
+   * Deduplicated for the lifetime of the page, not just while in flight.
+   *
+   * Restoring a session is a once-per-load act, and doing it twice is not
+   * merely wasteful: each attempt rotates the refresh token, and presenting a
+   * rotated one is what the server treats as theft — it revokes the session
+   * family and the user is thrown out. React StrictMode calls the boot effect
+   * twice by design, so "once per load" has to be enforced here rather than
+   * assumed.
+   *
+   * The promise is retained deliberately. A second caller receives the first
+   * call's Session — which is the correct answer to "what is this session?" —
+   * instead of starting a rotation that would invalidate it.
+   */
+  if (restoreInFlight) return restoreInFlight;
+
+  restoreInFlight = (async () => {
+    const ok = await refreshSession();
+    if (!ok) return null;
+
+    try {
+      const data = await api<LoginResponse>('/api/auth/me', { skipRetry: true });
+      return toSession(data);
+    } catch {
+      return null;
+    }
+  })();
+
+  return restoreInFlight;
+}
+
+/**
+ * Forget the memoised restore, so the next call really talks to the server.
+ *
+ * Signing out ends the session that `restoreSession` cached; without this, a
+ * sign-out followed by a sign-in on the same page would replay the previous
+ * user's result.
+ */
+export function resetRestoredSession(): void {
+  restoreInFlight = null;
 }
 
 /**
@@ -240,6 +273,8 @@ export async function logout(allDevices = false): Promise<void> {
     // Intentionally ignored — see above.
   } finally {
     setAccessToken(null);
+    // The memoised restore describes the session that just ended.
+    resetRestoredSession();
   }
 }
 

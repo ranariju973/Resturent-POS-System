@@ -107,12 +107,35 @@ async function parse<T>(res: Response): Promise<T> {
 /**
  * Exchange the refresh cookie for a new access token.
  *
- * Single-flight: if three requests 401 at once, they must not fire three
- * refreshes. The backend rotates on every refresh and treats a replayed token
- * as theft, so a burst of parallel refreshes would revoke the session — the
- * exact failure this guard prevents.
+ * ── Single-flight, and why that alone was not enough ───────────────────────
+ * The backend rotates the refresh token on every call and treats a REPLAYED
+ * one as theft: it revokes the whole session family, which is an immediate,
+ * unrecoverable logout. So two refreshes that both present the same cookie
+ * must never happen.
+ *
+ * Guarding only the in-flight promise stops CONCURRENT callers — three
+ * requests that 401 at once — but not SEQUENTIAL ones. React StrictMode mounts
+ * every component twice, and the second mount runs after the first has already
+ * settled, so `bootstrapAuth` ran twice with the guard released in between.
+ * The second call presented the token the first had just rotated, and the
+ * server correctly concluded the session was compromised. That is the
+ * "refreshing the page logs me out" bug.
+ *
+ * Two things close it. The promise is now retained for a short settle window
+ * after it resolves, so a caller arriving moments later reuses the result
+ * instead of starting a second rotation; and `hasFreshSession()` below lets
+ * boot-time restore skip the call entirely when a token already exists.
  */
 let refreshInFlight: Promise<boolean> | null = null;
+
+/**
+ * How long a completed refresh keeps answering for later callers.
+ *
+ * Long enough to cover a StrictMode double-mount and any retry burst that
+ * follows a slow first paint; far shorter than the 15-minute access token, so
+ * this can never hand back a genuinely stale answer.
+ */
+const REFRESH_SETTLE_MS = 3000;
 
 export function refreshSession(): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight;
@@ -150,10 +173,19 @@ export function refreshSession(): Promise<boolean> {
       accessToken = null;
       return false;
     } finally {
-      // Cleared on the next tick so concurrent callers all observe this result.
+      /*
+       * Held for a settle window rather than cleared on the next tick.
+       *
+       * The old one-tick release made this a guard against concurrency only.
+       * A caller arriving a few milliseconds after the previous refresh
+       * resolved — exactly what StrictMode's second mount does — found it null
+       * and started a second rotation, replaying a token the server had just
+       * retired. Keeping the resolved promise briefly means that caller gets
+       * the same answer instead of burning the session.
+       */
       setTimeout(() => {
         refreshInFlight = null;
-      }, 0);
+      }, REFRESH_SETTLE_MS);
     }
   })();
 
