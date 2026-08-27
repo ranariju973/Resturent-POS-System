@@ -566,7 +566,24 @@ export const refresh = asyncHandler(async (req, res) => {
     throw ApiError.unauthorized();
   }
 
-  const user = await User.findById(stored.user).select('+tokenVersion');
+  /*
+   * Unscoped, necessarily — and this is what made refresh fail with a 500.
+   *
+   * `User` is tenant-scoped, and POST /api/auth/refresh carries no session:
+   * it runs before requireAuth, so nothing has entered a tenant context. A
+   * scoped query with no tenant does not fall back to "all tenants", it
+   * THROWS — by design, because falling back is how one restaurant's data
+   * leaks into another's. The throw surfaced as a 500, the client read that as
+   * a dead session, and the user was signed out on every page reload.
+   *
+   * Same shape as the other identity lookups in this file: the key is a
+   * globally unique ObjectId taken from a token this handler has already
+   * verified and hash-matched, so it can only ever return the one row that
+   * token names. The tenant is a property OF that row — which is precisely why
+   * it cannot be known before the row is loaded.
+   */
+  const user = await runUnscoped('refresh: token subject -> account (the tenant lives on it)',
+    async () => User.findById(stored.user).select('+tokenVersion'));
 
   if (!user || !user.isActive || (payload.tv ?? 0) !== (user.tokenVersion ?? 0)) {
     await RefreshToken.revokeFamily(stored.family, 'user-invalid');

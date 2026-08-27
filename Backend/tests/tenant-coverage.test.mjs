@@ -228,8 +228,16 @@ console.log('\n--- cross-tenant reads are few, and each says why ---');
  * discard it on a mismatch. It exists to stop a leak rather than risk one — a
  * device cookie left by a previous owner on a shared browser used to be
  * reported as the current owner's terminal.
+ *
+ * Raised from 11 to 12 for the User lookup inside POST /auth/refresh. That
+ * endpoint runs BEFORE requireAuth by necessity — it is how a session is
+ * restored — so no tenant context exists, and `User` is tenant-scoped. Without
+ * the escape the query threw and refresh answered 500, which the client read
+ * as a dead session: the "refreshing the page logs me out" bug. Same safe
+ * shape as the others here — a globally unique _id taken from a token this
+ * handler has already verified AND hash-matched, returning exactly one row.
  */
-const MAX_UNSCOPED_CALLS = 11;
+const MAX_UNSCOPED_CALLS = 12;
 const srcFiles = [];
 const walk = (dir) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

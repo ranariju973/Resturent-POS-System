@@ -446,6 +446,77 @@ t('the original owner still sees their terminal on the same browser',
   JSON.stringify(alphaMe.body?.data?.terminal));
 
 // ---------------------------------------------------------------------------
+section('a page refresh keeps the session alive');
+// ---------------------------------------------------------------------------
+/*
+ * ── The endpoint no test had ever called over HTTP ─────────────────────────
+ * The access token lives only in memory in the browser, so EVERY page reload
+ * trades the refresh cookie for a new one. That makes POST /api/auth/refresh
+ * the single most-travelled authenticated path in the product — and it was
+ * never exercised here, which is how it shipped broken.
+ *
+ * It ran before requireAuth, so no tenant context existed, and the `User`
+ * lookup inside it is tenant-scoped. A scoped query with no tenant THROWS
+ * rather than quietly reading across restaurants, so the handler answered 500.
+ * The client could not tell that from a dead session and signed the user out
+ * on every refresh.
+ *
+ * The assertions below are deliberately about the STATUS as much as the token:
+ * a 500 here is the bug, and a test that only checked "did I get a token"
+ * would have reported failure without ever naming why.
+ */
+const reloadJar = 'browser-reload';
+googleIdentities.set('token-dana', {
+  sub: 'google-sub-dana',
+  email: 'dana@test.invalid',
+  email_verified: true,
+  name: 'Dana Owner',
+  given_name: 'Dana',
+  picture: 'https://example.invalid/d.png',
+});
+
+const danaSignIn = await call('POST', '/api/auth/google', {
+  body: { credential: 'token-dana' },
+  jar: reloadJar,
+});
+t('an owner signs in with Google', danaSignIn.status === 200, `status ${danaSignIn.status}`);
+t('...and the browser is holding a refresh cookie',
+  cookiesFor(reloadJar).some((c) => c.startsWith('vp_rt=')),
+  cookiesFor(reloadJar).map((c) => c.split('=')[0]).join(', ') || 'none');
+
+// Onboarding first, so the account has a restaurant — the state a real
+// session is in when someone actually reloads the page.
+const danaTenant = await call('POST', '/api/tenants', {
+  token: danaSignIn.body?.data?.accessToken,
+  body: { name: 'Dana Diner' },
+  jar: reloadJar,
+});
+t('...and names a restaurant', danaTenant.status === 201, `status ${danaTenant.status}`);
+
+// THE RELOAD. Exactly what the browser does on F5.
+const reload = await call('POST', '/api/auth/refresh', { jar: reloadJar });
+t('THE REQUIREMENT: refreshing the page does not 500',
+  reload.status !== 500,
+  `status ${reload.status}${reload.status === 500 ? ' — tenant context missing in refresh' : ''}`);
+t('...it succeeds', reload.status === 200, `status ${reload.status}`);
+t('...and hands back a usable access token',
+  typeof reload.body?.data?.accessToken === 'string');
+
+// The whole point: the new token must actually work.
+const afterReload = await call('GET', '/api/auth/me', {
+  token: reload.body?.data?.accessToken,
+  jar: reloadJar,
+});
+t('...that still reaches the session', afterReload.status === 200, `status ${afterReload.status}`);
+t('...as the same owner, in the same restaurant',
+  afterReload.body?.data?.restaurant?.name === 'Dana Diner',
+  afterReload.body?.data?.restaurant?.name);
+
+// A second reload must work too — rotation has to keep working, not just once.
+const reloadAgain = await call('POST', '/api/auth/refresh', { jar: reloadJar });
+t('a second reload also survives', reloadAgain.status === 200, `status ${reloadAgain.status}`);
+
+// ---------------------------------------------------------------------------
 section('a Google token that does not verify is refused');
 // ---------------------------------------------------------------------------
 const badToken = await call('POST', '/api/auth/google', { body: { credential: 'not-a-real-token' } });
