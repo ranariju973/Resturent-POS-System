@@ -347,6 +347,105 @@ t('Beta sees only its own categories',
 t('the two restaurants are genuinely different', tenantA !== tenantB);
 
 // ---------------------------------------------------------------------------
+section('a second owner on the SAME browser gets their own terminal setup');
+// ---------------------------------------------------------------------------
+/*
+ * ── The case every other test here is built to miss ────────────────────────
+ * Every terminal above uses its own cookie jar, because the device cookie is
+ * what tells two restaurants apart and sharing one would blur the very thing
+ * under test. That isolation also meant the most common real-world setup was
+ * never exercised: ONE browser, used by one owner and then another.
+ *
+ * The device cookie deliberately survives logout — a till must not need
+ * re-linking when a shift ends. So when a second owner signs in on a machine
+ * the first one linked, the stale cookie is still presented. It used to be
+ * taken at face value: the new owner was told the terminal was already linked,
+ * shown the PREVIOUS restaurant's name, and given no route to terminal setup,
+ * because the only route was a banner hidden precisely when "linked" was true.
+ *
+ * The fix is that a device only counts as this session's when its restaurant
+ * matches the session's. This asserts that, deliberately reusing Alpha's jar.
+ */
+googleIdentities.set('token-carol', {
+  sub: 'google-sub-carol',
+  email: 'carol@test.invalid',
+  email_verified: true,
+  name: 'Carol Owner',
+  given_name: 'Carol',
+  picture: 'https://example.invalid/c.png',
+});
+
+// Alpha's jar still holds the device cookie minted when Alpha linked its till.
+t('the shared browser really is carrying a device cookie',
+  cookiesFor('terminal-a').some((c) => c.startsWith('vp_dev=')),
+  cookiesFor('terminal-a').map((c) => c.split('=')[0]).join(', ') || 'none');
+
+const carolSignIn = await call('POST', '/api/auth/google', {
+  body: { credential: 'token-carol' },
+  jar: 'terminal-a',
+});
+t('a brand-new email signs in on the shared browser', carolSignIn.status === 200,
+  `status ${carolSignIn.status}`);
+t('...and is sent to onboarding, not into someone else\'s restaurant',
+  carolSignIn.body?.data?.onboarding?.required === true);
+t('...carrying no restaurant of its own yet',
+  (carolSignIn.body?.data?.restaurant ?? null) === null);
+
+const carolOnboardingToken = carolSignIn.body?.data?.accessToken;
+
+// The pre-onboarding session must not inherit Alpha's terminal either.
+const carolMeBefore = await call('GET', '/api/auth/me', {
+  token: carolOnboardingToken,
+  jar: 'terminal-a',
+});
+t('an account with no restaurant is offered no terminal',
+  carolMeBefore.body?.data?.terminal === null,
+  JSON.stringify(carolMeBefore.body?.data?.terminal));
+
+const carolTenant = await call('POST', '/api/tenants', {
+  token: carolOnboardingToken,
+  body: { name: 'Carol Cafe' },
+  jar: 'terminal-a',
+});
+t('the second owner creates their own restaurant', carolTenant.status === 201,
+  `status ${carolTenant.status}`);
+
+const carolToken = carolTenant.body?.data?.accessToken;
+t('...which is genuinely a different restaurant',
+  carolTenant.body?.data?.restaurant?.id !== String(tenantA),
+  carolTenant.body?.data?.restaurant?.name);
+
+/*
+ * The assertion this whole section exists for. Alpha's device cookie is still
+ * in this jar and still valid — it simply is not Carol's terminal.
+ */
+const carolMe = await call('GET', '/api/auth/me', { token: carolToken, jar: 'terminal-a' });
+/*
+ * `terminal` must be present as an explicit null, not merely absent.
+ *
+ * This distinction is the test. An endpoint that never returns the field at
+ * all also satisfies `?? null` — which is exactly what the buggy version did,
+ * so a laxer assertion here passed while the bug was live and proved nothing.
+ * Requiring the KEY proves the handler looked at the device and decided it was
+ * not Carol's, rather than never having looked.
+ */
+t('/auth/me answers the terminal question at all',
+  carolMe.body?.data !== undefined && 'terminal' in (carolMe.body?.data ?? {}),
+  Object.keys(carolMe.body?.data ?? {}).join(', '));
+t('the second owner is NOT handed the first owner\'s terminal',
+  carolMe.body?.data?.terminal === null,
+  JSON.stringify(carolMe.body?.data?.terminal));
+t('...and sees their own restaurant named on screen',
+  carolMe.body?.data?.restaurant?.name === 'Carol Cafe',
+  carolMe.body?.data?.restaurant?.name);
+
+// Alpha, on that same browser, must be unaffected — the cookie is still theirs.
+const alphaMe = await call('GET', '/api/auth/me', { token: tokenA, jar: 'terminal-a' });
+t('the original owner still sees their terminal on the same browser',
+  alphaMe.body?.data?.terminal?.name === 'Front counter',
+  JSON.stringify(alphaMe.body?.data?.terminal));
+
+// ---------------------------------------------------------------------------
 section('a Google token that does not verify is refused');
 // ---------------------------------------------------------------------------
 const badToken = await call('POST', '/api/auth/google', { body: { credential: 'not-a-real-token' } });

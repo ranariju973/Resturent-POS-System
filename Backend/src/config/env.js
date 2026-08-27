@@ -103,7 +103,20 @@ const schema = z
     CLOUDINARY_API_SECRET: z.string().min(1, 'CLOUDINARY_API_SECRET is required'),
 
     JSON_BODY_LIMIT: z.string().default('100kb'),
-    UPLOAD_MAX_BYTES: bytes.default(5 * 1024 * 1024),
+    /*
+     * 4MB, not 5.
+     *
+     * The frontend is served by Vercel, whose rewrite proxies /api to the
+     * backend — and that proxy caps a request body at ~4.5MB. A 5MB ceiling
+     * here meant images in the 4.5-5MB gap were killed at the proxy, which
+     * answers with its own HTML rather than this API's JSON envelope. The
+     * client could not parse it, so a perfectly ordinary "too big" turned
+     * into an unreadable failure with no actionable message.
+     *
+     * Capping below the proxy's limit means multer rejects the file first,
+     * with the clear 413 it already knows how to produce.
+     */
+    UPLOAD_MAX_BYTES: bytes.default(4 * 1024 * 1024),
 
     LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
   })
@@ -171,6 +184,33 @@ if (isProd && corsOrigins.some((o) => o.includes('localhost') || o === '*')) {
   process.stderr.write(
     `\nRefusing to start: CORS_ORIGIN contains "*" or a localhost origin while NODE_ENV=production.\n` +
       `Set CORS_ORIGIN to the real frontend domain(s).\n\n`,
+  );
+  process.exit(1);
+}
+
+/*
+ * A development build serving an HTTPS front end cannot hold a session.
+ *
+ * The refresh and device cookies take `secure` and `sameSite` from
+ * `isProd` (see utils/jwt.js). Under NODE_ENV=development that is
+ * `secure: false, sameSite: 'strict'` — correct for http://localhost, and
+ * silently fatal for an https origin: the browser withholds the cookie, every
+ * POST /api/auth/refresh sees nothing, and the user is signed out on each page
+ * reload with no error anywhere to explain it.
+ *
+ * That symptom costs hours to trace, so it is a boot failure instead. The
+ * mirror of the production check above, and deliberately narrow: it fires only
+ * when EVERY origin is https, so a mixed local/staging list still starts.
+ */
+if (!isProd && corsOrigins.length > 0 && corsOrigins.every((o) => o.startsWith('https://'))) {
+  process.stderr.write(
+    `\nRefusing to start: NODE_ENV is "${raw.NODE_ENV}" but every CORS_ORIGIN is https.\n\n` +
+      `  ${corsOrigins.join('\n  ')}\n\n` +
+      `Session cookies would be issued without "Secure" and with SameSite=Strict,\n` +
+      `which browsers withhold from an https site — so signing in would appear to\n` +
+      `work and every page refresh would silently log the user out.\n\n` +
+      `Either set NODE_ENV=production (deployed), or point CORS_ORIGIN at your\n` +
+      `local dev origin, e.g. CORS_ORIGIN=http://localhost:8080\n\n`,
   );
   process.exit(1);
 }

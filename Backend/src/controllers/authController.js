@@ -37,6 +37,52 @@ import {
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { logger } from '../utils/logger.js';
 
+/**
+ * The terminal this browser is linked to — but only if it is OUR terminal.
+ *
+ * ── The bug this closes ────────────────────────────────────────────────────
+ * The device cookie is a one-year binding that deliberately survives logout: a
+ * till must not need re-linking every time a cashier's shift ends. On a SHARED
+ * browser that becomes a leak between restaurants. Owner A links the machine,
+ * signs out; owner B signs in with a different Google account and creates
+ * restaurant B — and every "is this terminal linked?" answer still described
+ * restaurant A's terminal. B was shown A's restaurant name on the login
+ * screen, and was never offered terminal setup, because as far as the client
+ * could tell the machine was already linked.
+ *
+ * So the cookie alone is not an answer to "which terminal is this session's".
+ * It is only an answer once it agrees with the session's restaurant. A device
+ * belonging to anyone else is reported as absent — not cleared, because the
+ * machine may genuinely be restaurant A's till and an owner glancing at a
+ * second account must not silently unlink it. Linking a terminal as B
+ * overwrites the cookie through the ordinary path.
+ *
+ * @param {import('express').Request} req
+ * @param {import('mongoose').Types.ObjectId|string|null} tenantId the SESSION's
+ *   restaurant — not the device's.
+ * @returns {Promise<object|null>}
+ */
+async function ownTerminal(req, tenantId) {
+  const deviceToken = req.cookies?.[DEVICE_COOKIE];
+  if (!deviceToken || !tenantId) return null;
+
+  // Unscoped for the usual reason: resolving WHICH restaurant a globally
+  // unique token names is the whole point. The comparison below is what makes
+  // it safe to have looked across tenants at all.
+  const device = await runUnscoped('session terminal: device token -> restaurant', async () =>
+    Device.findByToken(deviceToken));
+
+  if (!device) return null;
+  if (String(device.tenantId) !== String(tenantId)) {
+    logger.info('Ignoring a device cookie belonging to another restaurant', {
+      requestId: req.id,
+      userId: req.user?.id,
+    });
+    return null;
+  }
+  return device;
+}
+
 /** One message for every failure mode. Do not make this more specific. */
 const GENERIC_LOGIN_FAILURE = 'Invalid credentials';
 const LOCKED_MESSAGE = 'Too many failed attempts — try again later';
@@ -120,6 +166,14 @@ async function completeLogin(req, res, user, { tenant, device } = {}) {
   await user.registerSuccessfulLogin();
   const { accessToken } = await issueSession(res, user, req);
 
+  /*
+   * A PIN login already resolved the device — it is how the restaurant was
+   * found in the first place. A Google login did not, so look now: an owner
+   * signing in needs to know whether THIS machine is their terminal, and it is
+   * the answer that decides whether the client offers terminal setup.
+   */
+  const terminal = device ?? (await ownTerminal(req, user.tenantId));
+
   await AuditLog.record(
     {
       actor: user._id,
@@ -153,7 +207,7 @@ async function completeLogin(req, res, user, { tenant, device } = {}) {
      * means the labels can never disagree with the session they belong to.
      */
     restaurant: tenant ? { id: String(tenant._id), name: tenant.name, slug: tenant.slug } : null,
-    terminal: device ? { id: String(device._id), name: device.name } : null,
+    terminal: terminal ? { id: String(terminal._id), name: terminal.name } : null,
   });
 }
 
@@ -600,9 +654,20 @@ export const logout = asyncHandler(async (req, res) => {
 export const me = asyncHandler(async (req, res) => {
   const tenant = req.tenantId ? await Tenant.findById(req.tenantId).lean() : null;
 
+  /*
+   * The terminal belongs in the session payload, not only in the public
+   * /auth/terminal probe. That probe is unauthenticated, so it can only report
+   * what the cookie says — and on a shared browser the cookie may name someone
+   * else's restaurant. Here there IS a session to check it against, so this is
+   * the only answer that can be trusted to decide whether the client offers
+   * terminal setup.
+   */
+  const terminal = await ownTerminal(req, req.tenantId);
+
   return sendSuccess(res, {
     user: publicUser(req.authUser),
     restaurant: tenant ? { id: String(tenant._id), name: tenant.name, slug: tenant.slug } : null,
+    terminal: terminal ? { id: String(terminal._id), name: terminal.name } : null,
     onboarding: req.tenantId ? null : { required: true, reason: 'no-restaurant' },
   });
 });

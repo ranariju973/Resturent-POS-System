@@ -219,8 +219,17 @@ console.log('\n--- cross-tenant reads are few, and each says why ---');
  * below is a place where a bug becomes a leak between customers, so the number
  * is asserted rather than trusted: raising it is a deliberate edit that shows
  * up in review.
+ *
+ * Raised from 10 to 11 for authController's `ownTerminal` — resolving the
+ * device cookie to find out WHICH restaurant this browser was linked to. It is
+ * the canonical legitimate shape for this escape: the lookup key is a
+ * globally-unique token, it returns at most one row, and the very next thing
+ * the caller does is COMPARE that row's tenantId against the session's and
+ * discard it on a mismatch. It exists to stop a leak rather than risk one — a
+ * device cookie left by a previous owner on a shared browser used to be
+ * reported as the current owner's terminal.
  */
-const MAX_UNSCOPED_CALLS = 10;
+const MAX_UNSCOPED_CALLS = 11;
 const srcFiles = [];
 const walk = (dir) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
