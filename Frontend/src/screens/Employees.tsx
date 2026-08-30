@@ -138,7 +138,36 @@ export function Employees() {
               <Icon icon="lucide:link" size={15} /> Set up terminal
             </button>
           </div>
-        ) : null}
+        ) : (
+          /*
+           * Once linked, the same screen is still the way to rename a terminal,
+           * retire a machine that has been replaced, or move this browser onto
+           * a different till. The banner above is an alarm; this is a door, so
+           * it is quiet.
+           */
+          <button
+            type="button"
+            className="press"
+            onClick={actions.openTerminalSetup}
+            style={{
+              alignSelf: 'flex-start',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+              padding: '7px 4px',
+              border: 0,
+              background: 'transparent',
+              fontSize: 13,
+              fontWeight: 600,
+              color: 'rgba(0,0,0,0.58)',
+            }}
+          >
+            <Icon icon="lucide:monitor-smartphone" size={15} />
+            {state.terminal?.name
+              ? `This machine is “${state.terminal.name}” — manage terminals`
+              : 'Manage terminals'}
+          </button>
+        )}
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {TABS.map((tab) => (

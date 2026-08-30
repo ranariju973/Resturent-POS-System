@@ -236,8 +236,40 @@ console.log('\n--- cross-tenant reads are few, and each says why ---');
  * as a dead session: the "refreshing the page logs me out" bug. Same safe
  * shape as the others here — a globally unique _id taken from a token this
  * handler has already verified AND hash-matched, returning exactly one row.
+ *
+ * Raised from 12 to 17 for the email-and-password administrator door. Sign-up
+ * and sign-in have the same structural problem every entry above has: they run
+ * BEFORE any restaurant is known, because discovering which one the account
+ * belongs to is what they are for. The five, each named in its own reason
+ * string:
+ *
+ *   signup: email -> existing account       is this address already taken?
+ *   signup: create the account              the new row has no tenant yet
+ *   password sign-in: email -> account      the resolution itself
+ *   google sign-in: verified email -> …     linking a Google identity onto an
+ *                                           existing password account
+ *   google sign-in: persist the linked id   writes that link, keyed by _id
+ *
+ * The two email lookups are the only ones here whose key is not a
+ * globally-unique token or an _id, so they deserve the closer look: `email` is
+ * unique only PER restaurant, so an unscoped query on it could in principle
+ * return a row from another. That is not a leak in either case — it is the
+ * required behaviour. The signup check must see every restaurant or it would
+ * approve an address an established owner already holds, and the sign-in
+ * lookup is answering "which restaurant is this person's?" from a credential
+ * that is then verified with bcrypt before anything is returned. Both are
+ * restricted to administrators, and neither discloses a row it does not
+ * authenticate.
+ *
+ * Raised from 17 to 18 for "google sign-in: retire the unverified password".
+ * Same shape as User.updateSelf above: a maintenance write keyed by a single
+ * _id the handler is already holding, running during authentication before any
+ * restaurant is known — and the account it targets may genuinely have none yet.
+ * It exists to CLOSE a hole rather than risk one: without it, an address
+ * registered by someone who never controlled the mailbox would keep a working
+ * password into the restaurant of whoever really owns it.
  */
-const MAX_UNSCOPED_CALLS = 12;
+const MAX_UNSCOPED_CALLS = 18;
 const srcFiles = [];
 const walk = (dir) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

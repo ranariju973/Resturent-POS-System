@@ -1,42 +1,66 @@
 /**
- * Auth routes.
+ * Authentication routes.
  *
- * The login routes and refresh are the only unauthenticated write endpoints in
- * the system, so each carries its own rate limiter, stricter than the general
- * API limiter mounted above them.
+ * ── Three doors, and what each one is for ──────────────────────────────────
+ *   POST /google          owners and administrators — a Google ID token
+ *   POST /register        owners and administrators — email + password, signup
+ *   POST /login/password  the same account, returning
+ *   POST /login/staff     cashiers and kitchen staff — a 4-digit PIN, at a
+ *                         terminal that already knows its restaurant
  *
- * Note what is NOT here: any way to sign in with a password. Administrators
- * authenticate with Google (POST /google) and staff with a 4-digit PIN at a
- * linked terminal (POST /login/staff). There is no third door.
+ * The two administrator doors are alternatives, not tiers: they issue the same
+ * session, land on the same onboarding step and share one lockout policy. An
+ * account may hold both credentials at once — signing in with Google on an
+ * address that already has a password links them (see authController).
+ *
+ * Every unauthenticated route here is rate-limited and validated, and every
+ * failure returns one indistinguishable message. Adding a fourth door means
+ * adding an entry to tests/route-coverage.test.mjs saying why, which is the
+ * point of that sweep.
  */
 import { Router } from 'express';
-import { loginLimiter, refreshLimiter } from '../middleware/rateLimit.js';
+import { loginLimiter, signupLimiter, refreshLimiter } from '../middleware/rateLimit.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/auth.js';
-import { googleLoginSchema, staffLoginSchema, logoutSchema } from '../validators/auth.js';
-import { loginGoogle, loginStaff, refresh, logout, me } from '../controllers/authController.js';
+import {
+  googleLoginSchema,
+  registerSchema,
+  passwordLoginSchema,
+  staffLoginSchema,
+  logoutSchema,
+} from '../validators/auth.js';
+import {
+  loginGoogle,
+  registerWithPassword,
+  loginPassword,
+  loginStaff,
+  refresh,
+  logout,
+  me,
+} from '../controllers/authController.js';
 
 const router = Router();
 
 /** Owners and administrators — a Google ID token. */
 router.post('/google', loginLimiter, validate({ body: googleLoginSchema }), loginGoogle);
 
-/**
- * Cashier / kitchen staff — 4-digit PIN.
- *
- * The restaurant comes from the terminal's device cookie, not the body: PINs
- * are unique per restaurant, so a lookup without one would be ambiguous.
+/*
+ * Owner signup. signupLimiter rather than loginLimiter, because a SUCCESS is
+ * what needs bounding here — see the note on that limiter.
  */
+router.post('/register', signupLimiter, validate({ body: registerSchema }), registerWithPassword);
+
+/** Owners and administrators — email + password. */
+router.post(
+  '/login/password',
+  loginLimiter,
+  validate({ body: passwordLoginSchema }),
+  loginPassword,
+);
+
 router.post('/login/staff', loginLimiter, validate({ body: staffLoginSchema }), loginStaff);
-
-/** Rotate the refresh cookie for a fresh access token. */
 router.post('/refresh', refreshLimiter, refresh);
-
-/** Revoke the session. Deliberately unauthenticated: an expired access token
- *  must not prevent a client from logging out cleanly. */
 router.post('/logout', validate({ body: logoutSchema }), logout);
-
-/** Current user, from the database rather than the token's claims. */
 router.get('/me', requireAuth(), me);
 
 export default router;

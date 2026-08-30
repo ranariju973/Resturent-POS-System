@@ -260,7 +260,7 @@ t('...with a code the client can distinguish from a wrong PIN',
   pinBeforeLink.body?.error?.code === 'TERMINAL_NOT_LINKED',
   pinBeforeLink.body?.error?.code);
 
-const linked = await call('POST', '/api/devices', {
+const linked = await call('POST', '/api/auth/devices', {
   token: tokenA,
   body: { name: 'Front counter' },
   jar: 'terminal-a',
@@ -311,7 +311,7 @@ t('a second restaurant can be created', createdB.status === 201, `status ${creat
 const tokenB = createdB.body?.data?.accessToken;
 const tenantB = createdB.body?.data?.restaurant?.id;
 
-await call('POST', '/api/devices', { token: tokenB, body: { name: 'Till 1' }, jar: 'terminal-b' });
+await call('POST', '/api/auth/devices', { token: tokenB, body: { name: 'Till 1' }, jar: 'terminal-b' });
 
 await runInTenant(tenantB, async () => {
   const cashier = new User({ name: 'Beta Cashier', role: ROLES.CASHIER });

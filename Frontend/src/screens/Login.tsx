@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../icons/Icon';
-import { CONFIG, usePos } from '../store';
-import { CARD_SHADOW, ErrorLine } from '../components/ui';
+import { CONFIG, PASSWORD_MIN, usePos } from '../store';
+import { CARD_SHADOW, ErrorLine, Field, bareInput } from '../components/ui';
 import { GoogleButton } from '../components/GoogleButton';
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'clear', '0', 'back'];
@@ -93,7 +93,7 @@ export function Login() {
               icon="lucide:user-round"
               label="Owner"
               onClick={() =>
-                actions.patch({ mode: 'google', loginError: '', pin: '', match: null })
+                actions.patch({ mode: 'owner', loginError: '', pin: '', match: null })
               }
             />
           </div>
@@ -232,44 +232,7 @@ export function Login() {
             )}
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 2 }}>
-            <p
-              style={{
-                margin: 0,
-                fontSize: 13,
-                fontWeight: 500,
-                color: 'rgba(0,0,0,0.58)',
-                textAlign: 'center',
-                lineHeight: 1.55,
-              }}
-            >
-              {state.terminalLinked
-                ? 'Owners and managers sign in with Google.'
-                : 'An owner needs to sign in once to link this terminal. After that, staff can use their PIN.'}
-            </p>
-
-            <div style={{ animation: shakeAnim }}>
-              <GoogleButton
-                disabled={state.authPending}
-                onCredential={(credential) => void actions.signInWithGoogle(credential)}
-              />
-            </div>
-
-            {state.authPending ? (
-              <span
-                style={{
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: 'rgba(0,0,0,0.58)',
-                  textAlign: 'center',
-                }}
-              >
-                Signing in&hellip;
-              </span>
-            ) : null}
-
-            {state.loginError ? <ErrorLine message={state.loginError} /> : null}
-          </div>
+          <OwnerPanel shakeAnim={shakeAnim} />
         )}
       </div>
 
@@ -291,6 +254,186 @@ export function Login() {
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The administrator door — both credentials on one panel.
+ *
+ * Google and email+password are alternatives, not tiers. Google is listed
+ * first because it is the one that carries whatever 2FA the owner already has
+ * and stores no secret here; the password form exists so that running a
+ * restaurant does not require holding a Google account.
+ *
+ * A real <form> rather than a div of inputs, so Enter submits and password
+ * managers recognise the fields — an owner signing in at 6am should not have
+ * to reach for the mouse.
+ */
+function OwnerPanel({ shakeAnim }: { shakeAnim: string }) {
+  const { state, actions } = usePos();
+  const signup = state.ownerTab === 'signup';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 2 }}>
+      <div style={{ display: 'flex', gap: 18, justifyContent: 'center' }}>
+        <SubTab
+          active={!signup}
+          label="Sign in"
+          onClick={() => actions.setOwnerTab('signin')}
+        />
+        <SubTab
+          active={signup}
+          label="Create account"
+          onClick={() => actions.setOwnerTab('signup')}
+        />
+      </div>
+
+      {!state.terminalLinked ? (
+        <p style={hintText}>
+          An owner needs to sign in once to link this terminal. After that, staff can use their
+          PIN.
+        </p>
+      ) : null}
+
+      <form
+        style={{ display: 'flex', flexDirection: 'column', gap: 10, animation: shakeAnim }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void (signup ? actions.signUpWithPassword() : actions.signInWithPassword());
+        }}
+      >
+        {signup ? (
+          <Field label="Your name" htmlFor="owner-name">
+            <input
+              id="owner-name"
+              type="text"
+              autoComplete="name"
+              maxLength={80}
+              placeholder="e.g. Priya Sharma"
+              value={state.authName}
+              onChange={(e) => actions.patch({ authName: e.target.value, loginError: '' })}
+              style={bareInput}
+            />
+          </Field>
+        ) : null}
+
+        <Field label="Email" htmlFor="owner-email">
+          <input
+            id="owner-email"
+            type="email"
+            autoComplete="email"
+            maxLength={254}
+            placeholder="you@restaurant.com"
+            value={state.authEmail}
+            onChange={(e) => actions.patch({ authEmail: e.target.value, loginError: '' })}
+            style={bareInput}
+          />
+        </Field>
+
+        <Field label="Password" htmlFor="owner-password">
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              id="owner-password"
+              type={state.authShowPassword ? 'text' : 'password'}
+              /*
+               * 'new-password' on the signup half is what makes a password
+               * manager OFFER to generate one instead of autofilling the
+               * existing entry for this site.
+               */
+              autoComplete={signup ? 'new-password' : 'current-password'}
+              maxLength={72}
+              placeholder={signup ? `At least ${PASSWORD_MIN} characters` : '••••••••'}
+              value={state.authPassword}
+              onChange={(e) => actions.patch({ authPassword: e.target.value, loginError: '' })}
+              style={{ ...bareInput, flex: 1, minWidth: 0 }}
+            />
+            <button
+              type="button"
+              className="press"
+              aria-label={state.authShowPassword ? 'Hide password' : 'Show password'}
+              onClick={() => actions.patch({ authShowPassword: !state.authShowPassword })}
+              style={{
+                border: 0,
+                background: 'transparent',
+                color: 'rgba(0,0,0,0.45)',
+                display: 'flex',
+                alignItems: 'center',
+                padding: 0,
+                marginTop: 4,
+              }}
+            >
+              <Icon icon={state.authShowPassword ? 'lucide:eye-off' : 'lucide:eye'} size={17} />
+            </button>
+          </span>
+        </Field>
+
+        <button
+          type="submit"
+          className="press hv-primary"
+          disabled={state.authPending}
+          style={state.authPending ? { ...confirmButton, opacity: 0.6 } : confirmButton}
+        >
+          <Icon icon={signup ? 'lucide:user-round-plus' : 'lucide:log-in'} size={18} />
+          {state.authPending
+            ? signup
+              ? 'Creating account…'
+              : 'Signing in…'
+            : signup
+              ? 'Create account'
+              : 'Sign in'}
+        </button>
+      </form>
+
+      {/*
+        * No "forgot password" link, deliberately — there is no mail provider
+        * in this deployment, so it would be a button that cannot work. Signing
+        * in with Google on the same address links the two accounts and leaves
+        * either credential able to open it, which is the recovery path.
+        */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={rule} />
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(0,0,0,0.45)' }}>or</span>
+        <span style={rule} />
+      </div>
+
+      <div style={{ animation: shakeAnim }}>
+        <GoogleButton
+          disabled={state.authPending}
+          onCredential={(credential) => void actions.signInWithGoogle(credential)}
+        />
+      </div>
+
+      {state.loginError ? <ErrorLine message={state.loginError} /> : null}
+    </div>
+  );
+}
+
+function SubTab({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="press"
+      onClick={onClick}
+      style={{
+        border: 0,
+        background: 'transparent',
+        padding: '2px 0 5px',
+        fontSize: 14,
+        fontWeight: 700,
+        color: active ? '#00754A' : 'rgba(0,0,0,0.45)',
+        borderBottom: `2px solid ${active ? '#00754A' : 'transparent'}`,
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -346,6 +489,17 @@ const confirmButton: CSSProperties = {
   justifyContent: 'center',
   gap: 8,
 };
+
+const hintText: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  fontWeight: 500,
+  color: 'rgba(0,0,0,0.58)',
+  textAlign: 'center',
+  lineHeight: 1.55,
+};
+
+const rule: CSSProperties = { flex: 1, height: 1, background: '#edebe9' };
 
 const lockedButton: CSSProperties = {
   ...confirmButton,

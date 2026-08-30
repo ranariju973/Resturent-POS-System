@@ -22,6 +22,7 @@ import type { DailyReport, ExpenseRow, MonthlyReport, PnlReport } from './lib/re
 import type { DashboardData } from './lib/dashboardApi';
 import type { PhoneSuggestion } from './lib/customersApi';
 import { ApiError } from './lib/api';
+import { prepareImage, ImageError } from './lib/image';
 import { money } from './lib/format';
 import { MOBILE_MAX } from './lib/useViewport';
 import * as settingsApi from './lib/settingsApi';
@@ -48,6 +49,8 @@ import type {
 } from './data/types';
 import {
   loginGoogle,
+  loginWithPassword,
+  registerWithPassword,
   loginStaff,
   createRestaurant,
   fetchTerminalInfo,
@@ -56,6 +59,13 @@ import {
   restoreSession,
   loginErrorMessage,
   isTerminalNotLinked,
+  listTerminals,
+  relinkTerminal,
+  renameTerminal as apiRenameTerminal,
+  unlinkTerminal,
+  isTerminalNameTaken,
+  type Session,
+  type TerminalRow,
   type SessionUser,
   type Restaurant,
   type Terminal,
@@ -64,6 +74,31 @@ import {
 import { canViewScreen, defaultScreen } from './lib/permissions';
 
 const SHELL_KEY = 'pos.shell.v1';
+
+/**
+ * Minimum length for a NEW owner password. Mirrors the server's
+ * `PASSWORD_MIN` in Backend/src/validators/auth.js so the form can say so
+ * before a round trip — the server still decides, and a drift between the two
+ * costs only a slightly late error message, never a weaker password.
+ */
+export const PASSWORD_MIN = 10;
+
+/**
+ * The lowest "Terminal N" not already in use.
+ *
+ * Every owner used to be handed the literal 'Terminal 1'. On a browser a
+ * previous owner had used, that name was already taken by a row they could not
+ * see, so the very first thing they did was hit "a record with that name
+ * already exists" — the reported bug. Numbering from what exists makes the
+ * suggestion free by construction.
+ */
+function nextTerminalName(terminals: { name: string }[]): string {
+  const taken = new Set(terminals.map((t) => t.name.trim().toLowerCase()));
+  for (let n = 1; n <= taken.size + 1; n += 1) {
+    if (!taken.has(`terminal ${n}`)) return `Terminal ${n}`;
+  }
+  return `Terminal ${taken.size + 1}`;
+}
 
 /**
  * Sentinel for the billing grid's "no category filter". A real category id can
@@ -104,6 +139,18 @@ function describe(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
     if (err.isForbidden) return 'Your role does not allow that.';
     if (err.status === 0) return 'Cannot reach the server. Check your connection.';
+
+    /*
+     * A validation failure names its field, or it is useless.
+     *
+     * The server returns `{ message: 'Validation failed', details: [{field,
+     * message}] }`, and this used to keep only the message — so every rejected
+     * menu item, whatever was actually wrong with it, read as the bare words
+     * "Validation failed" and left the user to guess. The details are the
+     * whole answer; `loginErrorMessage` in lib/auth.ts already surfaces them.
+     */
+    if (err.status === 400 && err.details?.length) return err.details[0].message;
+
     return err.message || fallback;
   }
   return fallback;
@@ -243,7 +290,32 @@ interface State {
   /** An administrator is naming this terminal, on the setup card. */
   terminalSetup: boolean;
   terminalName: string;
-  mode: 'pin' | 'google';
+  /**
+   * Every terminal in this restaurant, for the setup picker.
+   *
+   * The screen used to be a bare name box, which is what made the machine
+   * unrecoverable once its cookie had been overwritten: the owner could not
+   * see that Terminal 1 already existed, and typing it was refused. Showing
+   * the list turns "invent an unused name" into "say which machine this is".
+   */
+  terminals: TerminalRow[];
+  terminalsLoading: boolean;
+  /** The picked row's id, or 'new' for the add-a-terminal form. */
+  terminalChoice: string;
+  /**
+   * Which door the login screen is showing. 'owner' covers both administrator
+   * credentials — Google and email+password — because they are alternatives on
+   * one panel, not separate screens.
+   */
+  mode: 'pin' | 'owner';
+  /** Which half of the owner panel: signing in, or creating an account. */
+  ownerTab: 'signin' | 'signup';
+  /** The owner email/password form. Never persisted; cleared on every exit. */
+  authName: string;
+  authEmail: string;
+  authPassword: string;
+  /** Whether the password field is revealed. */
+  authShowPassword: boolean;
   pin: string;
   /**
    * The authenticated staff member, shown on the confirmation badge.
@@ -265,6 +337,14 @@ interface State {
   active: ScreenId;
   hover: string;
   toast: string;
+  /**
+   * Whether the toast is reporting a success or a failure.
+   *
+   * Every message used to render with a green checkmark and vanish after 2.6
+   * seconds, including the ones saying an upload had been refused — so a
+   * failure looked like a confirmation and was gone before it could be read.
+   */
+  toastTone: 'ok' | 'error';
   tick: number;
 
   cat: string;
@@ -537,7 +617,15 @@ const createInitialState = (): State => {
     restaurantName: '',
     terminalSetup: false,
     terminalName: '',
+    terminals: [],
+    terminalsLoading: false,
+    terminalChoice: 'new',
     mode: 'pin',
+    ownerTab: 'signin',
+    authName: '',
+    authEmail: '',
+    authPassword: '',
+    authShowPassword: false,
     pin: '',
     match: null,
     loginError: '',
@@ -549,6 +637,7 @@ const createInitialState = (): State => {
     active: 'billing',
     hover: '',
     toast: '',
+    toastTone: 'ok',
     tick: 0,
 
     cat: SHOW_ALL,
@@ -767,14 +856,29 @@ function usePosState() {
     setState(ref.current);
   }, []);
 
+  /**
+   * A transient message.
+   *
+   * An error is given more than twice the dwell time of a confirmation, for
+   * the obvious reason: "Saved" is redundant with what the screen already
+   * shows, while "Enter a price like 4.25" is the only place that instruction
+   * appears, and 2.6 seconds is not long enough to read a sentence, look at
+   * the form and act on it.
+   */
   const flash = useCallback(
-    (toast: string) => {
+    (toast: string, toastTone: 'ok' | 'error' = 'ok') => {
       window.clearTimeout(toastTimer.current);
-      patch({ toast });
-      toastTimer.current = window.setTimeout(() => patch({ toast: '' }), 2600);
+      patch({ toast, toastTone });
+      toastTimer.current = window.setTimeout(
+        () => patch({ toast: '' }),
+        toastTone === 'error' ? 6000 : 2600,
+      );
     },
     [patch],
   );
+
+  /** A failure. Same channel as `flash`, styled and timed as a problem. */
+  const warn = useCallback((message: string) => flash(message, 'error'), [flash]);
 
   /**
    * Look the number up, once the cashier stops typing.
@@ -931,6 +1035,20 @@ function usePosState() {
     };
 
     const setDraft = (p: Partial<ItemDraft>) => patch({ draft: { ...ref.current.draft, ...p } });
+
+    /*
+     * The item-photo preview's object URL.
+     *
+     * A blob URL pins its blob in memory until it is revoked, and the browser
+     * has no way to know a <img src> was replaced. Held here rather than in
+     * state because it is not something to render — it is a resource to
+     * release, and the one rule is that exactly one is alive at a time.
+     */
+    let draftObjectUrl: string | null = null;
+    const revokeDraftImage = () => {
+      if (draftObjectUrl) URL.revokeObjectURL(draftObjectUrl);
+      draftObjectUrl = null;
+    };
     const setCustDraft = (p: Partial<CustomerDraft>) =>
       patch({ custDraft: { ...ref.current.custDraft, ...p }, custError: '' });
     const setExpDraft = (p: Partial<ExpenseDraft>) =>
@@ -987,7 +1105,7 @@ function usePosState() {
           if (isTerminalNotLinked(err)) {
             patch({
               terminalLinked: false,
-              mode: 'google',
+              mode: 'owner',
               pin: '',
               match: null,
               authPending: false,
@@ -1017,6 +1135,68 @@ function usePosState() {
       },
 
       /**
+       * Land a completed sign-in, whichever door it came through.
+       *
+       * Shared by all three — Google, email+password and PIN-less owner signup
+       * — because the decisions here are about the SESSION, not the
+       * credential: whether a restaurant exists yet, and whether this machine
+       * is that restaurant's terminal. Duplicating them per door is how the
+       * two answers drift apart.
+       */
+      applySession: (session: Session) => {
+        // Whatever door was used, the typed secret is done with.
+        const cleared = { authPassword: '', authPending: false, loginError: '' };
+
+        /*
+         * A `notice` is not an error — the sign-in worked — but it is the only
+         * place the person is told that something about their account changed
+         * underneath them. Routed through `warn` rather than patched straight
+         * into `toast` so it gets a dismissal timer; a toast set by hand has
+         * none and stays on screen until something else replaces it.
+         */
+        if (session.notice) warn(session.notice);
+
+        /*
+         * A real session that cannot reach anything yet.
+         *
+         * Deliberately does NOT call landingScreen: there is no restaurant,
+         * so every screen behind the nav would fail its first request. The
+         * app renders the naming step instead, and the server agrees — a
+         * token with no restaurant can only reach /auth/me and /tenants.
+         */
+        if (session.onboarding) {
+          patch({
+            ...cleared,
+            user: session.user,
+            onboarding: session.onboarding,
+            restaurantName: session.onboarding.suggestedName ?? '',
+          });
+          return;
+        }
+
+        patch({
+          ...cleared,
+          user: session.user,
+          restaurant: session.restaurant,
+          onboarding: null,
+          /*
+           * The SESSION decides whether this terminal is linked, not the
+           * device cookie.
+           *
+           * The server returns a terminal only when the device belongs to
+           * the restaurant that just signed in. A cookie left behind by a
+           * different owner on a shared browser therefore arrives as null,
+           * which correctly reads as "not linked yet" and surfaces the setup
+           * prompt — instead of showing this owner the previous one's
+           * terminal and hiding the only way to fix it.
+           */
+          terminal: session.terminal,
+          terminalLinked: session.terminal !== null,
+          ...landingScreen(session.user),
+        });
+      },
+
+      /**
        * Google sign-in, for owners and administrators.
        *
        * `credential` is the ID token Google Identity Services hands the page.
@@ -1029,48 +1209,7 @@ function usePosState() {
         patch({ authPending: true, loginError: '' });
 
         try {
-          const session = await loginGoogle(credential);
-
-          /*
-           * A real session that cannot reach anything yet.
-           *
-           * Deliberately does NOT call landingScreen: there is no restaurant,
-           * so every screen behind the nav would fail its first request. The
-           * app renders the naming step instead, and the server agrees — a
-           * token with no restaurant can only reach /auth/me and /tenants.
-           */
-          if (session.onboarding) {
-            patch({
-              user: session.user,
-              onboarding: session.onboarding,
-              restaurantName: session.onboarding.suggestedName ?? '',
-              authPending: false,
-              loginError: '',
-            });
-            return;
-          }
-
-          patch({
-            user: session.user,
-            restaurant: session.restaurant,
-            onboarding: null,
-            authPending: false,
-            loginError: '',
-            /*
-             * The SESSION decides whether this terminal is linked, not the
-             * device cookie.
-             *
-             * The server returns a terminal only when the device belongs to
-             * the restaurant that just signed in. A cookie left behind by a
-             * different owner on a shared browser therefore arrives as null,
-             * which correctly reads as "not linked yet" and surfaces the setup
-             * prompt — instead of showing this owner the previous one's
-             * terminal and hiding the only way to fix it.
-             */
-            terminal: session.terminal,
-            terminalLinked: session.terminal !== null,
-            ...landingScreen(session.user),
-          });
+          actions.applySession(await loginGoogle(credential));
         } catch (err) {
           patch({
             loginError: loginErrorMessage(err, 'Google sign-in was refused'),
@@ -1079,6 +1218,77 @@ function usePosState() {
           shakeNow();
         }
       },
+
+      /** Owner sign-in with an email and a password. */
+      signInWithPassword: async () => {
+        const { authEmail, authPassword, authPending } = ref.current;
+        if (authPending) return;
+
+        const email = authEmail.trim();
+        if (!email || !authPassword) {
+          return patch({ loginError: 'Enter your email and password' });
+        }
+
+        patch({ authPending: true, loginError: '' });
+
+        try {
+          actions.applySession(await loginWithPassword(email, authPassword));
+        } catch (err) {
+          patch({
+            loginError: loginErrorMessage(err, 'Invalid credentials'),
+            authPending: false,
+            // Clear the secret but keep the email, so a mistyped password is
+            // one field to retype rather than two.
+            authPassword: '',
+          });
+          shakeNow();
+        }
+      },
+
+      /**
+       * Create an owner account.
+       *
+       * The checks here mirror the server's schema so an obvious mistake is
+       * caught while the form is still on screen. They are a courtesy, not the
+       * enforcement — the server validates independently and is the only
+       * opinion that counts.
+       */
+      signUpWithPassword: async () => {
+        const { authName, authEmail, authPassword, authPending } = ref.current;
+        if (authPending) return;
+
+        const name = authName.trim();
+        const email = authEmail.trim();
+
+        if (name.length < 2) {
+          return patch({ loginError: 'Enter your name (at least 2 characters)' });
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          return patch({ loginError: 'Enter a valid email address' });
+        }
+        if (authPassword.length < PASSWORD_MIN) {
+          return patch({
+            loginError: `Choose a password of at least ${PASSWORD_MIN} characters`,
+          });
+        }
+
+        patch({ authPending: true, loginError: '' });
+
+        try {
+          actions.applySession(await registerWithPassword({ name, email, password: authPassword }));
+        } catch (err) {
+          patch({
+            loginError: loginErrorMessage(err, 'Could not create the account'),
+            authPending: false,
+            authPassword: '',
+          });
+          shakeNow();
+        }
+      },
+
+      /** Switch between the owner panel's two halves, discarding the secret. */
+      setOwnerTab: (ownerTab: 'signin' | 'signup') =>
+        patch({ ownerTab, authPassword: '', authShowPassword: false, loginError: '' }),
 
       setRestaurantName: (restaurantName: string) => patch({ restaurantName }),
 
@@ -1119,9 +1329,13 @@ function usePosState() {
              */
             terminalLinked: false,
             terminalSetup: true,
-            terminalName: 'Terminal 1',
             ...landingScreen(session.user),
           });
+
+          // A brand-new restaurant has no terminals, so this resolves to an
+          // empty list and a suggested name of "Terminal 1" — the same screen
+          // as before, but arrived at from the data rather than hard-coded.
+          void actions.loadTerminals();
         } catch (err) {
           patch({
             loginError: loginErrorMessage(err, 'Could not create the restaurant'),
@@ -1130,28 +1344,97 @@ function usePosState() {
         }
       },
 
-      openTerminalSetup: () =>
-        patch({
-          terminalSetup: true,
-          terminalName: ref.current.terminal?.name ?? 'Terminal 1',
-          loginError: '',
-        }),
+      openTerminalSetup: () => {
+        patch({ terminalSetup: true, loginError: '' });
+        void actions.loadTerminals();
+      },
 
       closeTerminalSetup: () => patch({ terminalSetup: false, loginError: '' }),
 
       setTerminalName: (terminalName: string) => patch({ terminalName }),
 
+      setTerminalChoice: (terminalChoice: string) => patch({ terminalChoice, loginError: '' }),
+
       /**
-       * Link this browser to the administrator's restaurant.
+       * Fetch the restaurant's terminals, and pre-select a sensible answer.
+       *
+       * ── Why the default name is computed, not hard-coded ──────────────────
+       * Every new owner used to be handed the literal string 'Terminal 1'. On
+       * a shared browser that guaranteed a collision with a row they could not
+       * see, which is the reported bug in one line. Numbering from what
+       * actually exists means the suggested name is free by construction.
+       *
+       * Failure is quiet on purpose: the list is a convenience, and an owner
+       * who cannot reach it must still be able to name a terminal and get on
+       * with opening the restaurant.
+       */
+      loadTerminals: async () => {
+        patch({ terminalsLoading: true });
+
+        try {
+          const terminals = await listTerminals();
+          const current = ref.current.terminal?.name;
+          const mine = current ? terminals.find((t) => t.name === current) : undefined;
+
+          patch({
+            terminals,
+            terminalsLoading: false,
+            // This machine's own terminal if the session names one; otherwise
+            // the add form, since nothing in the list is known to be this one.
+            terminalChoice: mine ? mine.id : 'new',
+            terminalName: mine ? '' : nextTerminalName(terminals),
+          });
+        } catch {
+          patch({
+            terminalsLoading: false,
+            terminalChoice: 'new',
+            terminalName: ref.current.terminalName || 'Terminal 1',
+          });
+        }
+      },
+
+      /**
+       * Commit the setup screen — either re-linking to a terminal that already
+       * exists, or creating a new one.
        *
        * The token comes back as an httpOnly cookie, never in the response, so
        * there is nothing to store here — after this call the machine simply
        * starts presenting it, and staff PIN sign-in begins working.
        */
       linkThisTerminal: async () => {
-        const { terminalName, authPending } = ref.current;
-        const name = terminalName.trim();
+        const { terminalName, terminalChoice, terminals, authPending } = ref.current;
         if (authPending) return;
+
+        const settle = (terminal: Terminal, message: string) => {
+          patch({
+            terminal,
+            terminalLinked: true,
+            terminalSetup: false,
+            authPending: false,
+            loginError: '',
+          });
+          flash(message);
+        };
+
+        // Re-linking: this machine IS one of the terminals already on file.
+        if (terminalChoice !== 'new') {
+          const chosen = terminals.find((t) => t.id === terminalChoice);
+          if (!chosen) return patch({ loginError: 'Choose a terminal' });
+
+          patch({ authPending: true, loginError: '' });
+          try {
+            settle(await relinkTerminal(chosen.id), `This machine is now “${chosen.name}”`);
+          } catch (err) {
+            patch({
+              loginError: loginErrorMessage(err, 'Could not re-link this terminal'),
+              authPending: false,
+            });
+            void actions.loadTerminals();
+          }
+          return;
+        }
+
+        const name = terminalName.trim();
         if (name.length < 2) {
           return patch({ loginError: 'Enter a name with at least 2 characters' });
         }
@@ -1159,18 +1442,94 @@ function usePosState() {
         patch({ authPending: true, loginError: '' });
 
         try {
-          const terminal = await linkTerminal(name);
+          settle(await linkTerminal(name), `This terminal is now linked as “${name}”`);
+        } catch (err) {
+          /*
+           * The name collided with a terminal that already exists — and that
+           * row is almost always this very machine's, from before its cookie
+           * was overwritten. So select it rather than reporting a dead end:
+           * the owner's next click re-links instead of inventing "Terminal 4"
+           * for the till that has been Terminal 1 all along.
+           */
+          if (isTerminalNameTaken(err)) {
+            const lower = name.toLowerCase();
+            const clash = ref.current.terminals.find((t) => t.name.toLowerCase() === lower);
+
+            if (clash) {
+              return patch({
+                authPending: false,
+                terminalChoice: clash.id,
+                loginError: `“${clash.name}” already exists. If this machine is it, re-link below.`,
+              });
+            }
+          }
+
           patch({
-            terminal,
-            terminalLinked: true,
-            terminalSetup: false,
+            loginError: loginErrorMessage(err, 'Could not link this terminal'),
+            authPending: false,
+          });
+        }
+      },
+
+      /** Correct a terminal's label. Never touches which machine answers to it. */
+      renameTerminal: async (id: string, next: string) => {
+        const name = next.trim();
+        if (name.length < 2) return patch({ loginError: 'Enter a name with at least 2 characters' });
+
+        const before = ref.current.terminals;
+        const wasMine = ref.current.terminal?.name === before.find((t) => t.id === id)?.name;
+
+        patch({ authPending: true, loginError: '' });
+        try {
+          const updated = await apiRenameTerminal(id, name);
+          patch({
+            terminals: before.map((t) => (t.id === id ? updated : t)),
+            // Keep the header honest when the machine renamed is this one.
+            terminal: wasMine ? { name: updated.name } : ref.current.terminal,
             authPending: false,
             loginError: '',
-            toast: `This terminal is now linked as “${terminal.name}”`,
           });
         } catch (err) {
           patch({
-            loginError: loginErrorMessage(err, 'Could not link this terminal'),
+            loginError: loginErrorMessage(err, 'Could not rename that terminal'),
+            authPending: false,
+          });
+        }
+      },
+
+      /**
+       * Retire a terminal.
+       *
+       * If it was THIS machine's, the session loses its binding — so the
+       * screen falls back to the add form rather than leaving a header naming
+       * a terminal that no longer resolves.
+       */
+      removeTerminal: async (id: string) => {
+        const before = ref.current.terminals;
+        const target = before.find((t) => t.id === id);
+        const wasMine = Boolean(target && ref.current.terminal?.name === target.name);
+
+        patch({ authPending: true, loginError: '' });
+        try {
+          await unlinkTerminal(id);
+          const terminals = before.filter((t) => t.id !== id);
+
+          patch({
+            terminals,
+            authPending: false,
+            loginError: '',
+            terminal: wasMine ? null : ref.current.terminal,
+            terminalLinked: wasMine ? false : ref.current.terminalLinked,
+            terminalChoice: ref.current.terminalChoice === id ? 'new' : ref.current.terminalChoice,
+            terminalName:
+              ref.current.terminalChoice === id
+                ? nextTerminalName(terminals)
+                : ref.current.terminalName,
+          });
+          flash(target ? `“${target.name}” removed` : 'Terminal removed');
+        } catch (err) {
+          patch({
+            loginError: loginErrorMessage(err, 'Could not remove that terminal'),
             authPending: false,
           });
         }
@@ -1202,6 +1561,11 @@ function usePosState() {
           restaurantName: '',
           terminalSetup: false,
           mode: 'pin',
+          ownerTab: 'signin',
+          authName: '',
+          authEmail: '',
+          authPassword: '',
+          authShowPassword: false,
           pin: '',
           match: null,
           loginError: '',
@@ -1238,7 +1602,7 @@ function usePosState() {
                 : null,
               // An unlinked machine cannot take a PIN, so open on the door
               // that still works.
-              mode: info.linked ? 'pin' : 'google',
+              mode: info.linked ? 'pin' : 'owner',
             });
           }
 
@@ -1451,7 +1815,7 @@ function usePosState() {
           patch({ checkoutPending: false });
           // A discount above the ceiling comes back 403 with the server's own
           // wording, which says more than a generic failure would.
-          flash(describe(err, 'Could not open the bill.'));
+          warn(describe(err, 'Could not open the bill.'));
         }
       },
 
@@ -1635,7 +1999,7 @@ function usePosState() {
               : 'Kitchen ticket sent',
           );
         } catch (err) {
-          flash(describe(err, 'Could not print the kitchen ticket.'));
+          warn(describe(err, 'Could not print the kitchen ticket.'));
         } finally {
           patch({ printBusy: false });
         }
@@ -1696,7 +2060,7 @@ function usePosState() {
               : 'Bill sent to the printer',
           );
         } catch (err) {
-          flash(describe(err, 'Could not print the bill.'));
+          warn(describe(err, 'Could not print the bill.'));
         } finally {
           patch({ printBusy: false });
         }
@@ -1754,7 +2118,7 @@ function usePosState() {
                 );
           flash(out.degraded ? 'QZ Tray is not running — used the browser instead' : 'Test sent');
         } catch (err) {
-          flash(describe(err, 'Could not print the test.'));
+          warn(describe(err, 'Could not print the test.'));
         } finally {
           patch({ printBusy: false });
         }
@@ -1826,7 +2190,7 @@ function usePosState() {
           void actions.loadTables();
         } catch (err) {
           patch({ checkoutPending: false });
-          flash(describe(err, 'Could not take that payment.'));
+          warn(describe(err, 'Could not take that payment.'));
         }
       },
 
@@ -1860,7 +2224,7 @@ function usePosState() {
           void actions.loadBoard();
         } catch (err) {
           patch({ checkoutPending: false });
-          flash(describe(err, 'Could not void that bill.'));
+          warn(describe(err, 'Could not void that bill.'));
         }
       },
 
@@ -1910,8 +2274,10 @@ function usePosState() {
           },
         }),
 
-      openItemModal: (item: MenuItem | null) =>
-        patch({
+      openItemModal: (item: MenuItem | null) => {
+        // Whatever the last edit previewed is gone the moment this form resets.
+        revokeDraftImage();
+        return patch({
           modal: { kind: 'item', mode: item ? 'edit' : 'add', target: item ? item.id : null },
           draft: {
             name: item ? item.name : '',
@@ -1923,12 +2289,16 @@ function usePosState() {
             available: item ? item.available : true,
             color: '#00754A',
           },
-        }),
+        });
+      },
 
       openDeleteModal: (delKind: 'cat' | 'item', target: string) =>
         patch({ modal: { kind: 'del', delKind, target } }),
 
-      closeModal: () => patch({ modal: null }),
+      closeModal: () => {
+        revokeDraftImage();
+        return patch({ modal: null });
+      },
 
       saveCat: async () => {
         const s = ref.current;
@@ -1959,7 +2329,7 @@ function usePosState() {
           flash('Category updated');
         } catch (err) {
           patch({ menuSaving: false, modal: null });
-          flash(describe(err, 'Could not save the category.'));
+          warn(describe(err, 'Could not save the category.'));
         }
       },
 
@@ -1968,17 +2338,47 @@ function usePosState() {
         const modal = s.modal;
         if (modal?.kind !== 'item') return;
         const name = s.draft.name.trim();
-        if (!name) return;
+        const price = s.draft.price.trim();
+        const category = s.draft.cat || s.selCat;
+
+        /*
+         * ── Check the obvious things before the round trip ──────────────────
+         * These mirror the server's schema (Backend/src/validators/menu.js) and
+         * are a courtesy, not the enforcement — the server validates
+         * independently and is the only opinion that counts.
+         *
+         * The reason they are worth having: the item schema is `.strict()` and
+         * its failures come back as one flat "Validation failed" list, so a
+         * missing category and a mistyped price were indistinguishable to
+         * anyone looking at the modal. Naming the field here, in the sentence
+         * the person actually reads, is the difference between a two-second
+         * fix and a mystery.
+         */
+        if (name.length < 2) return warn('Enter an item name of at least 2 characters.');
+        if (!category) return warn('Choose a category for this item.');
+        if (!/^\d+(\.\d{1,2})?$/.test(price)) {
+          return warn('Enter a price like 4.25 — digits only, at most two decimals.');
+        }
+        if (Number(price) <= 0) return warn('Enter a price greater than zero.');
 
         // The server takes major units as text and does its own conversion, so
         // the typed string is forwarded rather than parsed into a float here.
         const payload = {
           name,
-          price: s.draft.price.trim(),
-          category: s.draft.cat || s.selCat,
+          price,
+          category,
           description: s.draft.desc,
           available: s.draft.available,
           image: s.draft.file ?? null,
+          /*
+           * Only ever sent on an edit, and only when the owner cleared a photo
+           * without choosing a replacement — `removeImage` is not a key the
+           * create schema accepts, and a strict schema turns a stray one into
+           * a 400.
+           */
+          ...(modal.mode === 'edit' && !s.draft.file && !s.draft.img
+            ? { removeImage: true }
+            : {}),
         };
 
         patch({ menuSaving: true });
@@ -2012,7 +2412,7 @@ function usePosState() {
            * screen.
            */
           patch({ menuSaving: false });
-          flash(describe(err, 'Could not save the item.'));
+          warn(describe(err, 'Could not save the item.'));
         }
       },
 
@@ -2080,7 +2480,7 @@ function usePosState() {
           );
         } catch (err) {
           patch({ menuSaving: false, modal: null });
-          flash(describe(err, 'Could not delete that.'));
+          warn(describe(err, 'Could not delete that.'));
         }
       },
 
@@ -2103,17 +2503,53 @@ function usePosState() {
           patch({ items: ref.current.items.map((i) => (i.id === id ? item : i)) });
         } catch (err) {
           patch({ items: before });
-          flash(describe(err, 'Could not change availability.'));
+          warn(describe(err, 'Could not change availability.'));
         }
       },
 
-      pickImage: (file: File) => {
-        // The data URL is for the preview; the File itself is what gets
-        // uploaded. Keeping only the data URL would mean re-encoding a
-        // multi-megabyte image into JSON on save.
-        const reader = new FileReader();
-        reader.onload = () => setDraft({ img: String(reader.result), file });
-        reader.readAsDataURL(file);
+      /**
+       * Take a file from the picker, and make it uploadable.
+       *
+       * ── Why the work happens here and not on save ──────────────────────────
+       * A phone photograph is 3-8MB and the server's ceiling is 4MB, so half of
+       * them used to fail — after the whole file had been uploaded, with a 413
+       * arriving minutes later on restaurant wifi. Downscaling at pick time
+       * makes the failure impossible instead of merely reported, and the
+       * preview the owner is looking at is then the image that will actually be
+       * stored.
+       *
+       * The preview is an object URL rather than a data URL. Reading the file
+       * as base64 held a second, ~33%-larger copy of a multi-megabyte image in
+       * memory purely to show a 64px thumbnail.
+       */
+      pickImage: async (file: File) => {
+        try {
+          const prepared = await prepareImage(file);
+
+          // Release the previous preview before replacing it; an object URL
+          // pins its blob in memory until it is revoked.
+          revokeDraftImage();
+          const img = URL.createObjectURL(prepared);
+          draftObjectUrl = img;
+
+          setDraft({ img, file: prepared });
+        } catch (err) {
+          // ImageError carries a sentence written to be read by the user.
+          warn(err instanceof ImageError ? err.message : 'That image could not be used.');
+        }
+      },
+
+      /**
+       * Drop the item photo.
+       *
+       * Clears both halves of the draft's image state — the preview and the
+       * pending File — because `saveItem` reads BOTH to decide whether to send
+       * `removeImage`. Leaving either behind would mean the button appeared to
+       * work and the old photo came back on save.
+       */
+      clearImage: () => {
+        revokeDraftImage();
+        setDraft({ img: '', file: null });
       },
 
       startOrderAt: (table: Table) => {
@@ -2151,7 +2587,7 @@ function usePosState() {
           patch({ tableOrder: order, tableOrderLoading: false });
         } catch (err) {
           patch({ tableOrder: null, tableOrderLoading: false });
-          flash(describe(err, 'Could not load that bill.'));
+          warn(describe(err, 'Could not load that bill.'));
         }
       },
 
@@ -2270,7 +2706,7 @@ function usePosState() {
           void actions.loadTables({ withZones: true });
         } catch (err) {
           patch({ tblBusyId: null });
-          flash(describe(err, 'Could not remove that table.'));
+          warn(describe(err, 'Could not remove that table.'));
         }
       },
 
@@ -2307,7 +2743,7 @@ function usePosState() {
           flash(`${target.name} is free`);
         } catch (err) {
           patch({ tblBusyId: null });
-          flash(describe(err, 'Could not clear that table.'));
+          warn(describe(err, 'Could not clear that table.'));
           void actions.loadTables();
         }
       },
@@ -2336,7 +2772,7 @@ function usePosState() {
           flash(`${src.name} transferred to ${target.name}`);
         } catch (err) {
           patch({ tblBusyId: null });
-          flash(describe(err, 'Could not transfer that table.'));
+          warn(describe(err, 'Could not transfer that table.'));
           void actions.loadTables();
         }
       },
@@ -2357,7 +2793,7 @@ function usePosState() {
           flash(`${src.name} and ${other?.name ?? 'that table'} now share one bill`);
         } catch (err) {
           patch({ tblBusyId: null });
-          flash(describe(err, 'Could not merge those tables.'));
+          warn(describe(err, 'Could not merge those tables.'));
         }
       },
 
@@ -2392,7 +2828,7 @@ function usePosState() {
           patch({ tickets: s.tickets.map((t) => (t.id === id ? updated : t)) });
           flash(`Order #${updated.no} → ${KDS_COLS.find((c) => c.id === updated.status)?.label}`);
         } catch (err) {
-          flash(describe(err, 'Could not move that ticket.'));
+          warn(describe(err, 'Could not move that ticket.'));
           void actions.loadBoard();
         }
       },
@@ -2404,7 +2840,7 @@ function usePosState() {
           patch({ tickets: s.tickets.map((t) => (t.id === id ? updated : t)) });
           flash(`Order #${updated.no} recalled`);
         } catch (err) {
-          flash(describe(err, 'Could not recall that ticket.'));
+          warn(describe(err, 'Could not recall that ticket.'));
         }
       },
 
@@ -2436,7 +2872,7 @@ function usePosState() {
           patch({ viewOrder: order, viewOrderLoading: false });
         } catch (err) {
           patch({ viewOrderLoading: false });
-          flash(describe(err, 'Could not load that order.'));
+          warn(describe(err, 'Could not load that order.'));
         }
       },
 
@@ -2604,7 +3040,7 @@ function usePosState() {
           flash('Customer removed');
         } catch (err) {
           patch({ custSaving: false });
-          flash(describe(err, 'Could not remove that customer.'));
+          warn(describe(err, 'Could not remove that customer.'));
         }
       },
 
@@ -2633,7 +3069,7 @@ function usePosState() {
           // The stats above are already on screen and still correct, so this
           // failure costs the order list and nothing else.
           patch({ custHistoryLoading: false });
-          flash(describe(err, 'Could not load their order history.'));
+          warn(describe(err, 'Could not load their order history.'));
         }
       },
 
@@ -2788,7 +3224,7 @@ function usePosState() {
           });
           flash(employee.isActive ? `${employee.name} reactivated` : `${employee.name} deactivated`);
         } catch (err) {
-          flash(describe(err, 'Could not change that account.'));
+          warn(describe(err, 'Could not change that account.'));
         }
       },
 
@@ -2979,7 +3415,7 @@ function usePosState() {
           void reloadPayroll();
           flash(`${row.name} marked paid`);
         } catch (err) {
-          flash(describe(err, 'Could not mark that as paid.'));
+          warn(describe(err, 'Could not mark that as paid.'));
         }
       },
 
@@ -2991,7 +3427,7 @@ function usePosState() {
           void reloadPayroll();
           flash(`${row.name} reopened — the figures track attendance again`);
         } catch (err) {
-          flash(describe(err, 'Could not reopen that month.'));
+          warn(describe(err, 'Could not reopen that month.'));
         }
       },
 
@@ -3067,7 +3503,7 @@ function usePosState() {
           void actions.loadReport();
         } catch (err) {
           patch({ expSaving: false });
-          flash(describe(err, 'Could not remove that expense.'));
+          warn(describe(err, 'Could not remove that expense.'));
         }
       },
     };

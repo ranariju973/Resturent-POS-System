@@ -35,6 +35,16 @@ const EXEMPTIONS = {
     'Cannot require a session to create one. The Google ID token is verified '
     + 'cryptographically against Google\'s published keys (signature, iss, aud, exp) '
     + 'plus an email_verified check, and the route is rate-limited by loginLimiter.',
+  'auth.js POST /register':
+    'Cannot require a session to create one. Bounded by signupLimiter, which '
+    + '(unlike loginLimiter) counts SUCCESSES too, because a success is what '
+    + 'costs anything here. The account it creates has no restaurant and can '
+    + 'reach only GET /auth/me and POST /tenants until it names one.',
+  'auth.js POST /login/password':
+    'Same. Rate-limited by loginLimiter and account-locked with the same '
+    + 'progressive backoff as the PIN door, and every failure — unknown email, '
+    + 'wrong password, Google-only account — returns one indistinguishable '
+    + 'message after an equal-time bcrypt burn.',
   'auth.js POST /login/staff':
     'Same. Rate-limited and account-locked. The restaurant is resolved from the '
     + 'terminal\'s device cookie BEFORE the PIN is matched, so a PIN is only ever '
@@ -61,55 +71,84 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
 /**
  * Split a router file into one block per declared route, so a guard on route A
  * cannot be credited to route B.
+ *
+ * ── Why this slices rather than pattern-matches whole declarations ─────────
+ * It used to run two regexes: one for a multi-line middleware chain, ending at
+ * the first `\n);`, and one for a single-line declaration. A non-greedy body
+ * has no idea where a route STOPS, so a single-line route sitting above a
+ * multi-line one swallowed everything between them — and the routes in the
+ * middle vanished from the sweep entirely.
+ *
+ * That is the one failure this file exists to make impossible: a route that is
+ * never enumerated is indistinguishable from a route that is properly guarded.
+ * It is how POST /api/auth/login/password — an unauthenticated login endpoint —
+ * passed the sweep without ever being looked at.
+ *
+ * Slicing on the declaration boundary removes the guesswork. Every route's
+ * block runs to the start of the next declaration, so nothing can be absorbed
+ * and nothing can be skipped, whatever the formatting.
  */
 function parseRoutes(source) {
   const code = stripComments(source);
+
+  /*
+   * Where the router-wide guards start applying — a POSITION, not a boolean.
+   *
+   * `router.use()` is middleware, so it covers only what is declared AFTER it.
+   * kitchen.js relies on that: GET /stream sits deliberately above
+   * `router.use(requireAuth())` because EventSource cannot send an
+   * Authorization header, so the handler verifies a single-purpose token
+   * itself. Treating the guard as file-wide reported that route as protected
+   * by a wall it is explicitly in front of — the sweep asserting the opposite
+   * of the truth about the one route where it mattered most.
+   *
+   * Infinity when the guard is absent, so "declared after it" is never true.
+   */
+  const guardAt = (pattern) => {
+    const at = code.search(pattern);
+    return at === -1 ? Infinity : at;
+  };
   const routerWide = {
-    auth: /router\.use\(requireAuth\(\)\)/.test(code),
-    permission: /router\.use\(requirePermission\(/.test(code),
+    auth: guardAt(/router\.use\(requireAuth\(\)\)/),
+    permission: guardAt(/router\.use\(requirePermission\(/),
   };
 
-  const out = [];
-  // Terminator is `\n);` for a middleware chain OR `\n});` for an inline
-  // arrow handler. Matching only the first silently skipped health.js
-  // entirely — and a route file that parses to zero routes looks identical to
-  // a clean one, which is the exact failure this sweep exists to catch.
-  const re = /router\.(get|post|put|patch|delete)\(\s*'([^']+)'([\s\S]*?)\n\}?\);/g;
+  // Every declaration's position, so each body can be bounded by the next one.
+  const decl = /router\.(get|post|put|patch|delete)\(\s*'([^']*)'/g;
+  const found = [];
   let m;
-  while ((m = re.exec(code)) !== null) {
-    const [, method, routePath, body] = m;
-    out.push({
-      method: method.toUpperCase(),
-      path: routePath,
-      body,
-      hasAuth: routerWide.auth || /requireAuth\(\)/.test(body),
-      hasPermission:
-        routerWide.permission ||
-        /requirePermission\(|requireAnyPermission\(|requireAllPermissions\(/.test(body),
-      hasValidation: /validate\(\{/.test(body),
-      routerWideAuth: routerWide.auth,
-    });
+  while ((m = decl.exec(code)) !== null) {
+    // `at` bounds the PREVIOUS route's body; `from` starts this one's.
+    found.push({ method: m[1].toUpperCase(), path: m[2], at: m.index, from: decl.lastIndex });
   }
 
-  // Single-line declarations: router.get('/x', a, b);
-  const single = /router\.(get|post|put|patch|delete)\(\s*'([^']+)',([^\n]*)\);/g;
-  while ((m = single.exec(code)) !== null) {
-    const [, method, routePath, body] = m;
-    if (out.some((r) => r.method === method.toUpperCase() && r.path === routePath)) continue;
-    out.push({
-      method: method.toUpperCase(),
-      path: routePath,
-      body,
-      hasAuth: routerWide.auth || /requireAuth\(\)/.test(body),
-      hasPermission:
-        routerWide.permission ||
-        /requirePermission\(|requireAnyPermission\(|requireAllPermissions\(/.test(body),
-      hasValidation: /validate\(\{/.test(body),
-      routerWideAuth: routerWide.auth,
-    });
-  }
+  return found.map((route, i) => {
+    const body = code.slice(route.from, found[i + 1]?.at ?? code.length);
+    const underAuth = route.at > routerWide.auth;
 
-  return out;
+    /*
+     * Router-wide guards are removed before the INLINE check.
+     *
+     * A route's block runs to the next declaration, so any `router.use()`
+     * sitting between them falls inside it — and kitchen.js puts
+     * `router.use(requireAuth())` immediately after GET /stream precisely
+     * because that route must NOT be covered by it. Testing the raw block
+     * credited the route with the very guard it was declared in front of.
+     */
+    const inline = body.replace(/router\.use\([\s\S]*?\);/g, '');
+
+    return {
+      method: route.method,
+      path: route.path,
+      body: inline,
+      hasAuth: underAuth || /requireAuth\(\)/.test(inline),
+      hasPermission:
+        route.at > routerWide.permission
+        || /requirePermission\(|requireAnyPermission\(|requireAllPermissions\(/.test(inline),
+      hasValidation: /validate\(\{/.test(inline),
+      routerWideAuth: underAuth,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

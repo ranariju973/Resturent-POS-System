@@ -36,7 +36,7 @@ import {
   listItemsSchema,
   createCategorySchema,
 } from '../src/validators/menu.js';
-import { detectImageFormat } from '../src/middleware/upload.js';
+import { detectImageFormat, verifyImageContent } from '../src/middleware/upload.js';
 
 const { default: app } = await import('../app.js');
 
@@ -205,6 +205,59 @@ t('RIFF/WAVE rejected (RIFF prefix alone is not enough)', detectImageFormat(wav)
 const polyglot = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), phpShell]);
 t('polyglot with a real JPEG header IS accepted (documented limitation)',
   detectImageFormat(polyglot) === 'jpeg');
+
+// ---------------------------------------------------------------------------
+console.log('\n--- the declared MIME type cannot veto valid bytes ---');
+/*
+ * A browser derives file.type from the OS registry, not from the file, and
+ * that registry disagrees with itself across platforms. So the declared type
+ * gets to CONTRADICT the magic bytes and nothing more — the previous rule
+ * refused ordinary photographs whose only fault was an unfashionable spelling
+ * of "jpeg", which is what made the upload button fail "sometimes".
+ */
+const verify = (mimetype, buffer) => {
+  const req = { file: buffer === null ? undefined : { mimetype, buffer, size: buffer.length } };
+  let outcome;
+  verifyImageContent(req, {}, (err) => { outcome = err ?? null; });
+  return { error: outcome, detected: req.file?.detectedFormat };
+};
+
+for (const alias of ['image/jpeg', 'image/jpg', 'image/pjpeg', 'IMAGE/JPEG']) {
+  t(`a JPEG declared ${alias} is accepted`, verify(alias, jpeg).error === null);
+}
+for (const alias of ['image/png', 'image/x-png']) {
+  t(`a PNG declared ${alias} is accepted`, verify(alias, png).error === null);
+}
+t('a WebP declared image/webp is accepted', verify('image/webp', webp).error === null);
+
+// The reported bug: a real PNG the operating system labelled as a JPEG.
+t('a mislabelled but valid image is still refused as a contradiction',
+  verify('image/jpeg', png).error?.status === 400);
+
+// A browser with no opinion is not a contradiction — the bytes already proved it.
+for (const silent of ['', 'application/octet-stream']) {
+  t(`an undeclared type (${silent || 'empty'}) defers to the magic bytes`,
+    verify(silent, jpeg).error === null);
+}
+
+t('the detected format is recorded for the caller',
+  verify('image/jpg', jpeg).detected === 'jpeg');
+t('content that is not an image at all is refused whatever it claims',
+  verify('image/jpeg', pdf).error?.status === 400);
+t('...and the message names what IS accepted',
+  /JPEG, PNG or WebP/.test(verify('image/jpeg', pdf).error?.message ?? ''));
+
+// fileFilter defers its rejection so the request drains and the JSON 400 is
+// actually readable by the browser — see the note on that function.
+{
+  const req = { fileRejected: 'Image must be a JPEG, PNG or WebP' };
+  let outcome;
+  verifyImageContent(req, {}, (err) => { outcome = err; });
+  t('a type rejected by the filter surfaces as a 400, not a reset connection',
+    outcome?.status === 400);
+}
+t('no file at all is fine — the image is optional on create and update',
+  verify('', null).error === null);
 
 // ---------------------------------------------------------------------------
 console.log('\n--- every menu route is behind authentication (live HTTP) ---');

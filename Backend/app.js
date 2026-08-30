@@ -171,7 +171,12 @@ app.use('/api/auth', authRoutes);
 // See routes/terminal.js for why it is a separate file.
 app.use('/api/auth/terminal', terminalRoutes);
 app.use('/api/tenants', tenantRoutes);
-app.use('/api/devices', deviceRoutes);
+/*
+ * Under /api/auth deliberately — see the header of routes/devices.js. The
+ * device cookie is scoped to that path, and these handlers have to be able to
+ * read it, not only set it.
+ */
+app.use('/api/auth/devices', deviceRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/orders', orderRoutes);

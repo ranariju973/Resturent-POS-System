@@ -39,6 +39,15 @@ export interface Terminal {
   name: string;
 }
 
+/** A terminal as the management list reports it. */
+export interface TerminalRow {
+  id: string;
+  name: string;
+  /** Last staff PIN sign-in on it. Null for one never used, or just re-linked. */
+  lastSeenAt: string | null;
+  createdAt: string;
+}
+
 /**
  * Returned when a Google account has signed in but belongs to no restaurant.
  *
@@ -97,6 +106,16 @@ interface LoginResponse {
   restaurant?: Restaurant | null;
   terminal?: Terminal | null;
   onboarding?: { required: boolean; suggestedName?: string } | null;
+  /**
+   * Something that happened TO the account during this sign-in, in words the
+   * person can act on. Not an error — the sign-in succeeded.
+   *
+   * The one case today: a Google identity claimed an account that had an
+   * unverified password, and that password was discarded. Silence there would
+   * mean an owner discovering it at the next sign-in, with no reset flow and
+   * no way to work out why.
+   */
+  notice?: string | null;
 }
 
 /** What a completed sign-in gives the app. */
@@ -106,6 +125,8 @@ export interface Session {
   terminal: Terminal | null;
   /** Non-null only when the account has no restaurant yet. */
   onboarding: Onboarding | null;
+  /** Something the server needs to tell the person about their account. */
+  notice: string | null;
 }
 
 const toSession = (data: LoginResponse): Session => ({
@@ -115,6 +136,7 @@ const toSession = (data: LoginResponse): Session => ({
   onboarding: data.onboarding?.required
     ? { required: true, suggestedName: data.onboarding.suggestedName }
     : null,
+  notice: data.notice ?? null,
 });
 
 /**
@@ -130,6 +152,51 @@ export async function loginGoogle(credential: string): Promise<Session> {
     body: { credential },
     // A 401 here means the token was rejected, not that ours expired —
     // retrying through a refresh would be meaningless.
+    skipRetry: true,
+  });
+
+  setAccessToken(data.accessToken);
+  return toSession(data);
+}
+
+/** What the signup form collects. */
+export interface RegisterInput {
+  name: string;
+  email: string;
+  password: string;
+}
+
+/**
+ * Create an owner account with an email and a password.
+ *
+ * Always returns a session with `onboarding` set — a brand-new account has no
+ * restaurant by definition, so the naming step comes next. That makes the
+ * response shape identical to a first-time Google sign-in, which is why the
+ * store can hand both to the same handler.
+ */
+export async function registerWithPassword(input: RegisterInput): Promise<Session> {
+  const data = await api<LoginResponse>('/api/auth/register', {
+    method: 'POST',
+    body: input,
+    skipRetry: true,
+  });
+
+  setAccessToken(data.accessToken);
+  return toSession(data);
+}
+
+/**
+ * Owners and administrators — email + password.
+ *
+ * May also return a session with `onboarding` set: an owner can abandon the
+ * naming step and sign back in days later.
+ */
+export async function loginWithPassword(email: string, password: string): Promise<Session> {
+  const data = await api<LoginResponse>('/api/auth/login/password', {
+    method: 'POST',
+    body: { email, password },
+    // A 401 here means the credentials were refused, not that our token
+    // expired — retrying through a refresh would be meaningless.
     skipRetry: true,
   });
 
@@ -197,14 +264,67 @@ export async function fetchTerminalInfo(): Promise<TerminalInfo> {
   }
 }
 
-/** Link THIS browser to the signed-in administrator's restaurant. */
+/*
+ * Terminal management.
+ *
+ * Under /api/auth rather than /api/devices because the device cookie is scoped
+ * to that path — see the header of Backend/src/routes/devices.js.
+ */
+const TERMINALS = '/api/auth/devices';
+
+/** Every terminal in the signed-in administrator's restaurant. */
+export async function listTerminals(): Promise<TerminalRow[]> {
+  const data = await api<{ terminals: TerminalRow[] }>(TERMINALS, { skipRetry: true });
+  return data.terminals;
+}
+
+/** Link THIS browser to the restaurant as a NEW terminal. */
 export async function linkTerminal(name: string): Promise<Terminal> {
-  const data = await api<{ terminal: Terminal }>('/api/devices', {
+  const data = await api<{ terminal: Terminal }>(TERMINALS, {
     method: 'POST',
     body: { name },
     skipRetry: true,
   });
   return data.terminal;
+}
+
+/**
+ * Point an EXISTING terminal at this browser.
+ *
+ * The verb that makes a shared machine recoverable. The device cookie belongs
+ * to the browser and survives logout, so on a machine two owners have both
+ * used, the second one's cookie is what the first one's session finds — and
+ * without this, the only way back was to invent a name the machine's own old
+ * row had already taken.
+ *
+ * Rotates the terminal's token, so whichever browser held it before stops
+ * resolving it. The UI says so before the owner commits.
+ */
+export async function relinkTerminal(id: string): Promise<Terminal> {
+  const data = await api<{ terminal: Terminal }>(`${TERMINALS}/${id}/relink`, {
+    method: 'POST',
+    body: {},
+    skipRetry: true,
+  });
+  return data.terminal;
+}
+
+/** Rename a terminal. Touches the label only, never which machine answers to it. */
+export async function renameTerminal(id: string, name: string): Promise<TerminalRow> {
+  const data = await api<{ terminal: TerminalRow }>(`${TERMINALS}/${id}`, {
+    method: 'PATCH',
+    body: { name },
+    skipRetry: true,
+  });
+  return data.terminal;
+}
+
+/** Retire a terminal — a machine lost, sold or replaced. */
+export async function unlinkTerminal(id: string): Promise<void> {
+  await api<{ unlinked: boolean }>(`${TERMINALS}/${id}`, {
+    method: 'DELETE',
+    skipRetry: true,
+  });
 }
 
 /**
@@ -309,6 +429,18 @@ export function loginErrorMessage(err: unknown, fallback: string): string {
  */
 export function isTerminalNotLinked(err: unknown): boolean {
   return err instanceof ApiError && err.code === 'TERMINAL_NOT_LINKED';
+}
+
+/**
+ * Is this "a terminal already has that name"?
+ *
+ * Distinguishable on purpose. It is the one refusal the setup screen can act
+ * on by itself: the colliding row is almost always this very machine's, so the
+ * client selects it in the picker and offers to re-link rather than asking for
+ * a name nobody has used yet.
+ */
+export function isTerminalNameTaken(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'TERMINAL_NAME_TAKEN';
 }
 
 export { ApiError };

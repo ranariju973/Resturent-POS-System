@@ -99,6 +99,28 @@ export const loginLimiter = rateLimit({
 });
 
 /**
+ * Owner signup.
+ *
+ * ── Why this is not just loginLimiter ──────────────────────────────────────
+ * `skipSuccessfulRequests` is deliberately OFF here, which is the whole reason
+ * this limiter exists separately. On a login endpoint, a success is proof the
+ * caller is legitimate and costs nothing to allow — so only failures are worth
+ * counting. On a signup endpoint a success is the abuse: each one writes a
+ * durable administrator row and a refresh-token record, and a script that
+ * always succeeds would never consume a budget that ignores successes.
+ *
+ * Five new restaurants from one address in fifteen minutes is already far
+ * beyond any honest use of a POS signup form.
+ */
+export const signupLimiter = rateLimit({
+  ...baseOptions,
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  skipSuccessfulRequests: false,
+  keyGenerator: ipKeyGenerator,
+});
+
+/**
  * Refresh endpoint. Looser than login — a legitimate client refreshes every
  * 15 minutes — but still bounded, since refresh does a database lookup.
  */

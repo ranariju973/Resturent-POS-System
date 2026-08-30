@@ -7,8 +7,20 @@ export function Toast() {
   const isMobile = useIsMobile();
   if (!state.toast) return null;
 
+  /*
+   * A failure is not a confirmation, and must not look like one.
+   *
+   * This pill used to render every message on the same dark-green ground with
+   * the same checkmark, so "Image must be a JPEG, PNG or WebP" arrived wearing
+   * the visual language of success. The colour is the fastest signal on the
+   * screen; the icon and the longer dwell time (set in the store) do the rest.
+   */
+  const error = state.toastTone === 'error';
+
   return (
     <div
+      role={error ? 'alert' : 'status'}
+      aria-live={error ? 'assertive' : 'polite'}
       style={{
         position: 'fixed',
         /*
@@ -24,8 +36,9 @@ export function Toast() {
         justifyContent: isMobile ? 'center' : undefined,
         gap: 10,
         padding: '13px 22px',
-        borderRadius: 50,
-        background: '#1E3932',
+        borderRadius: error ? 14 : 50,
+        maxWidth: isMobile ? undefined : 420,
+        background: error ? '#8c1d18' : '#1E3932',
         color: '#ffffff',
         fontSize: 14,
         fontWeight: 600,
@@ -37,7 +50,11 @@ export function Toast() {
         zIndex: 41,
       }}
     >
-      <Icon icon="lucide:check-circle-2" size={18} color="#d4e9e2" />
+      <Icon
+        icon={error ? 'lucide:alert-circle' : 'lucide:check-circle-2'}
+        size={18}
+        color={error ? '#ffd9d6' : '#d4e9e2'}
+      />
       {state.toast}
     </div>
   );

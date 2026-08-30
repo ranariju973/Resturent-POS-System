@@ -2,6 +2,7 @@ import { Icon } from '../icons/Icon';
 import { SWATCHES } from '../data/seed';
 import { usePos } from '../store';
 import { plural } from '../lib/format';
+import { IMAGE_ACCEPT } from '../lib/image';
 import {
   Field,
   ModalActions,
@@ -121,21 +122,67 @@ export function ItemModal() {
             <Icon icon="lucide:image-plus" size={24} />
           </span>
         )}
-        <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: 'rgba(0,0,0,0.87)' }}>
             Item photo
           </span>
           <span style={{ fontSize: 12, fontWeight: 500, color: 'rgba(0,0,0,0.45)' }}>
-            Choose a square image — shown on the POS grid
+            JPG, PNG or WebP. Large photos are shrunk automatically.
           </span>
         </span>
+
+        {/*
+          * Clearing a photo needs its own control.
+          *
+          * The server has always accepted `removeImage`, but with no button
+          * wired to it the only way to get rid of a wrong picture was to
+          * upload a different one — so an item photographed by mistake kept
+          * its mistake. Inside a <label>, so stopPropagation is what keeps the
+          * click from also opening the file picker.
+          */}
+        {state.draft.img ? (
+          <button
+            type="button"
+            className="press"
+            aria-label="Remove photo"
+            title="Remove photo"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              actions.clearImage();
+            }}
+            style={{
+              border: 0,
+              background: 'transparent',
+              color: 'rgba(0,0,0,0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              padding: 4,
+              flexShrink: 0,
+            }}
+          >
+            <Icon icon="lucide:x" size={18} />
+          </button>
+        ) : null}
+
         <input
           id="itemimg"
           type="file"
-          accept="image/*"
+          /*
+           * Named formats rather than `image/*`.
+           *
+           * `image/*` invites the HEIC files an iPhone produces by default and
+           * the server will always refuse, so the picker offered a choice that
+           * could only end in an error. The extension list rides alongside the
+           * MIME types because extension matching is what actually works on
+           * Android and older Windows, where the MIME registry is unreliable.
+           */
+          accept={IMAGE_ACCEPT}
           onChange={(e) => {
             const file = e.target.files?.[0];
-            if (file) actions.pickImage(file);
+            if (file) void actions.pickImage(file);
+            // Let the same file be re-picked after a rejection.
+            e.target.value = '';
           }}
           style={{ display: 'none' }}
         />

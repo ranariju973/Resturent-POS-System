@@ -83,6 +83,17 @@ async function ownTerminal(req, tenantId) {
   return device;
 }
 
+/**
+ * Told to an owner whose password was discarded when their Google identity
+ * claimed the account — see the linking branch in loginGoogle.
+ *
+ * Said out loud rather than left to be discovered at the next sign-in. There
+ * is no password-reset flow here, so someone who finds out by being refused
+ * has no way to work out why or what to do instead.
+ */
+const PASSWORD_RETIRED_NOTICE =
+  'Your account is now signed in with Google. The password set on this email no longer works.';
+
 /** One message for every failure mode. Do not make this more specific. */
 const GENERIC_LOGIN_FAILURE = 'Invalid credentials';
 const LOCKED_MESSAGE = 'Too many failed attempts — try again later';
@@ -161,8 +172,16 @@ export async function issueSession(res, user, req, family) {
  * @param {object} [context.tenant] the restaurant, so the client can label the
  *   screen without a second request
  * @param {object} [context.device] the terminal, on a PIN login
+ * @param {'google'|'password'|'pin'} context.method which door was actually
+ *   used. Passed in rather than read back from `user.authProvider`, because an
+ *   account can hold both a Google identity and a password — that field records
+ *   how the account was created, which is a different question from how this
+ *   particular session started.
+ * @param {string} [context.notice] something that happened TO the account
+ *   during this sign-in that the person needs to be told about, in words they
+ *   can act on. Not an error — the sign-in succeeded.
  */
-async function completeLogin(req, res, user, { tenant, device } = {}) {
+async function completeLogin(req, res, user, { tenant, device, method, notice } = {}) {
   await user.registerSuccessfulLogin();
   const { accessToken } = await issueSession(res, user, req);
 
@@ -182,7 +201,7 @@ async function completeLogin(req, res, user, { tenant, device } = {}) {
       action: AUDIT_ACTION.LOGIN_SUCCESS,
       resource: 'User',
       resourceId: user._id,
-      meta: { method: user.authProvider === 'google' ? 'google' : 'pin' },
+      meta: { method },
     },
     req,
   );
@@ -208,6 +227,61 @@ async function completeLogin(req, res, user, { tenant, device } = {}) {
      */
     restaurant: tenant ? { id: String(tenant._id), name: tenant.name, slug: tenant.slug } : null,
     terminal: terminal ? { id: String(terminal._id), name: terminal.name } : null,
+    ...(notice ? { notice } : {}),
+  });
+}
+
+/**
+ * Shared tail of a successful sign-in by an account that has no restaurant yet.
+ *
+ * ── An account with no restaurant is NOT an error ──────────────────────────
+ * It is a real session whose token carries an empty tenant claim, which the
+ * model plugin then refuses for every scoped query — so it can reach exactly
+ * the two endpoints onboarding needs (GET /auth/me and POST /tenants) and
+ * nothing else.
+ *
+ * Issuing a normal session rather than a special-purpose signup ticket means
+ * POST /tenants sits behind the ordinary requireAuth wall, so there is no
+ * second, weaker authentication path to review.
+ *
+ * Both administrator doors land here — a first-time Google sign-in and a fresh
+ * password signup produce byte-identical responses, which is why the client's
+ * onboarding screen needed no knowledge of how the person got there.
+ *
+ * @param {'google'|'password'} method which door was used
+ * @param {string} [suggestedName] a default for the restaurant-name field, not
+ *   a decision
+ */
+async function completeOnboardingLogin(req, res, user, { method, suggestedName = '', notice }) {
+  await user.registerSuccessfulLogin();
+  const { accessToken } = await issueSession(res, user, req);
+
+  await AuditLog.record(
+    {
+      actor: user._id,
+      actorName: user.name,
+      actorRole: user.role,
+      action: AUDIT_ACTION.LOGIN_SUCCESS,
+      resource: 'User',
+      resourceId: user._id,
+      meta: { method, onboarding: true },
+      // No tenant exists to attribute this to yet.
+      tenantId: null,
+    },
+    req,
+  );
+
+  logger.info('Login succeeded, restaurant not yet named', {
+    requestId: req.id,
+    userId: String(user._id),
+    method,
+  });
+
+  return sendSuccess(res, {
+    accessToken,
+    user: publicUser(user),
+    onboarding: { required: true, reason: 'no-restaurant', suggestedName },
+    ...(notice ? { notice } : {}),
   });
 }
 
@@ -294,8 +368,103 @@ export const loginGoogle = asyncHandler(async (req, res) => {
    * googleId is globally unique (see models/User.js), so this is a single
    * indexed equality, not a scan.
    */
-  const existing = await runUnscoped('google sign-in: identity -> account', async () =>
+  let existing = await runUnscoped('google sign-in: identity -> account', async () =>
     User.findOne({ googleId: payload.sub }).select('+tokenVersion'));
+
+  /** Set when this sign-in claimed an account that had an unverified password. */
+  let linkRetiredPassword = false;
+
+  /*
+   * ── Linking a password account to its owner's Google identity ────────────
+   *
+   * No googleId matched, but the address may already belong to an owner who
+   * signed up with a password. Minting a second row for them would be wrong in
+   * three separate ways: they would arrive at an empty restaurant, their menu
+   * and orders would be unreachable, and the write itself collides on the
+   * {tenantId, email} unique index — surfacing as an opaque 409 on a button
+   * that says "Sign in with Google".
+   *
+   * Linking is safe because of what was checked above: Google asserted
+   * `email_verified` on a token whose signature we validated against Google's
+   * published keys. That is proof the caller controls the mailbox, which is
+   * exactly the bar for claiming an account identified by it — the same proof
+   * a password-reset email would provide.
+   *
+   * ── Why the password is RETIRED on the way through ───────────────────────
+   * This is the part that is not optional, and the reasoning is worth stating
+   * in full because the alternative looks harmless.
+   *
+   * There is no mail provider in this deployment, so signup cannot verify an
+   * address. Anyone can therefore register `victim@gmail.com` with a password
+   * of their choosing, having never touched that mailbox. If linking merely
+   * ADDED the Google identity, the real owner's first Google sign-in would
+   * drop them into the attacker's account — and the attacker would keep a
+   * working password into the victim's restaurant. That is pre-registration
+   * account hijacking, and it would be this feature's own doing.
+   *
+   * So the two credentials are not treated as equals, because they are not.
+   * A password on this deployment proves nothing about the mailbox; a verified
+   * Google token proves everything. When the two meet on one address, the
+   * proven one takes the account and the unproven one is discarded, along with
+   * every session it opened.
+   *
+   * The cost, stated plainly: an owner who signed up with a password and later
+   * signs in with Google to add a recovery path loses that password. They keep
+   * their account and their restaurant, and they sign in with Google from then
+   * on — which is what the response tells them, via `notice`.
+   *
+   * Restricted to administrators on purpose. A cashier row may carry an email
+   * (it is optional but allowed), and letting a Google token promote one into
+   * an admin session would be a privilege escalation with no password involved.
+   */
+  if (!existing) {
+    /*
+     * `+passwordHash` because the decision below turns on whether one exists.
+     * It is never compared and never leaves this handler — publicUser() does
+     * not carry it, and the field is select:false precisely so that reading it
+     * has to be asked for in writing, as here.
+     */
+    const byEmail = await runUnscoped('google sign-in: verified email -> existing account',
+      async () => User.findOne({ email: payload.email, role: ROLES.ADMIN })
+        .select('+tokenVersion +passwordHash'));
+
+    if (byEmail?.googleId && byEmail.googleId !== payload.sub) {
+      /*
+       * The address is already linked to a DIFFERENT Google identity. Google
+       * does not issue the same verified address to two accounts, so this is
+       * either a Workspace alias or something adversarial; either way, silently
+       * re-pointing an existing owner's account at a new identity is not an
+       * outcome to guess at.
+       */
+      await recordFailure(req, {
+        userId: byEmail._id,
+        reason: 'google-email-claimed',
+        identifier: payload.email,
+      });
+      throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
+    }
+
+    if (byEmail) {
+      // Read before it is overwritten below.
+      linkRetiredPassword = Boolean(byEmail.passwordHash);
+
+      byEmail.googleId = payload.sub;
+      byEmail.authProvider = 'google';
+      existing = byEmail;
+
+      if (linkRetiredPassword) {
+        // Invalidates every access and refresh token the old credential minted,
+        // so a session opened with it does not outlive it.
+        byEmail.tokenVersion = (byEmail.tokenVersion ?? 0) + 1;
+      }
+
+      logger.info('Linked a Google identity to an existing account', {
+        requestId: req.id,
+        userId: String(byEmail._id),
+        retiredPassword: linkRetiredPassword,
+      });
+    }
+  }
 
   if (existing && !existing.isActive) {
     await recordFailure(req, {
@@ -334,43 +503,48 @@ export const loginGoogle = asyncHandler(async (req, res) => {
   }
 
   /*
-   * An account with no restaurant is NOT an error. It is a real session whose
-   * token carries an empty tenant claim, which the model plugin then refuses
-   * for every scoped query — so it can reach exactly the two endpoints
-   * onboarding needs (GET /auth/me and POST /tenants) and nothing else.
-   *
-   * Issuing a normal session rather than a special-purpose signup ticket means
-   * POST /tenants sits behind the ordinary requireAuth wall, so there is no
-   * second, weaker authentication path to review.
+   * A newly linked googleId (and any refreshed avatar) has to reach the
+   * database before the session is issued — otherwise the next sign-in repeats
+   * the whole lookup and the link is never actually made. Unscoped because a
+   * linked account may still have no restaurant, and one that does is keyed
+   * here by its own _id.
    */
-  if (!user.tenantId) {
-    await user.registerSuccessfulLogin();
-    const { accessToken } = await issueSession(res, user, req);
+  if (existing?.isModified?.()) {
+    await runUnscoped('google sign-in: persist the linked identity', async () => existing.save());
+  }
+
+  /*
+   * Retiring the password is a separate write, deliberately.
+   *
+   * `passwordHash` is select:false, so the loaded document does not carry it
+   * and `save()` cannot remove a field it never read. An explicit $unset,
+   * keyed by _id, is the only way to be sure the credential is actually gone
+   * rather than merely absent from an in-memory copy.
+   */
+  if (linkRetiredPassword) {
+    await runUnscoped('google sign-in: retire the unverified password', async () =>
+      User.updateOne({ _id: existing._id }, { $unset: { passwordHash: 1 } }));
 
     await AuditLog.record(
       {
-        actor: user._id,
-        actorName: user.name,
-        actorRole: user.role,
-        action: AUDIT_ACTION.LOGIN_SUCCESS,
+        actor: existing._id,
+        actorName: existing.name,
+        actorRole: existing.role,
+        action: AUDIT_ACTION.PASSWORD_RETIRED,
         resource: 'User',
-        resourceId: user._id,
-        meta: { method: 'google', onboarding: true },
-        // No tenant exists to attribute this to yet.
-        tenantId: null,
+        resourceId: existing._id,
+        meta: { reason: 'google-identity-linked' },
+        tenantId: existing.tenantId ?? null,
       },
       req,
     );
+  }
 
-    return sendSuccess(res, {
-      accessToken,
-      user: publicUser(user),
-      onboarding: {
-        required: true,
-        reason: 'no-restaurant',
-        // A sensible default for the name field, not a decision.
-        suggestedName: payload.given_name ? `${payload.given_name}'s Restaurant` : '',
-      },
+  if (!user.tenantId) {
+    return completeOnboardingLogin(req, res, user, {
+      method: 'google',
+      suggestedName: payload.given_name ? `${payload.given_name}'s Restaurant` : '',
+      notice: linkRetiredPassword ? PASSWORD_RETIRED_NOTICE : undefined,
     });
   }
 
@@ -387,7 +561,180 @@ export const loginGoogle = asyncHandler(async (req, res) => {
       throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
     }
 
-    return completeLogin(req, res, user, { tenant });
+    return completeLogin(req, res, user, {
+      tenant,
+      method: 'google',
+      notice: linkRetiredPassword ? PASSWORD_RETIRED_NOTICE : undefined,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/register
+// ---------------------------------------------------------------------------
+/**
+ * Create an owner account with an email and a password.
+ *
+ * ── Why there is a second administrator door ───────────────────────────────
+ * Google sign-in remains the recommended one — it carries whatever 2FA the
+ * owner already has, and it stores no secret here. But requiring it makes a
+ * Google account a prerequisite for running a restaurant, which is not a
+ * dependency this product should impose. This door is the alternative, not a
+ * weakening of the first: it lands on the same session, the same onboarding
+ * step, the same lockout policy and the same audit trail.
+ *
+ * What it deliberately does NOT come with is a reset flow. There is no mail
+ * provider in this deployment, so "forgot password" would be a button that
+ * cannot work. An owner who wants a recovery path signs in once with Google on
+ * the same address, which links the two (see loginGoogle) and leaves either
+ * credential able to open the account.
+ *
+ * ── The 409 is an account-enumeration oracle, and that is the choice ───────
+ * Telling a caller that an address is taken reveals that it is registered.
+ * The alternative is answering "check your inbox" to every signup and
+ * resolving the truth by email — which needs the mail provider we do not have.
+ * Between an unusable form and a bounded disclosure, the disclosure wins: it
+ * sits behind signupLimiter (5 per 15 minutes per address block, successes
+ * included), and it says nothing about the account beyond its existence.
+ */
+export const registerWithPassword = asyncHandler(async (req, res) => {
+  const { name, email, password } = req.body;
+
+  /*
+   * Unscoped for the usual reason: signup has no session, so there is no
+   * restaurant to scope by. It has to look across all of them, because an
+   * address held by an established owner would otherwise pass this check and
+   * only fail later, in the middle of creating a second account for them.
+   */
+  const taken = await runUnscoped('signup: email -> existing account', async () =>
+    User.emailTaken(email));
+
+  if (taken) {
+    throw ApiError.conflict('An account with that email already exists', {
+      code: 'EMAIL_TAKEN',
+    });
+  }
+
+  const user = new User({
+    name,
+    email,
+    role: ROLES.ADMIN,
+    authProvider: 'password',
+    /*
+     * No restaurant yet, exactly as a first-time Google sign-in produces. The
+     * next step names one; until then this session can reach GET /auth/me and
+     * POST /tenants and nothing else.
+     */
+    tenantId: null,
+    isActive: true,
+  });
+
+  // Before save, not after: the pre('validate') hook refuses an administrator
+  // holding neither a Google identity nor a password hash.
+  await user.setPassword(password);
+
+  try {
+    await runUnscoped('signup: create the account', async () => user.save());
+  } catch (err) {
+    /*
+     * The check above and this write are two round trips, and two signups on
+     * the same address interleave through the gap. The {tenantId, email} unique
+     * index is what actually decides — both rows are tenant-less, so they share
+     * one index bucket and the loser lands here. Same answer either way.
+     */
+    if (err?.code === 11000) {
+      throw ApiError.conflict('An account with that email already exists', {
+        code: 'EMAIL_TAKEN',
+      });
+    }
+    throw err;
+  }
+
+  logger.info('Owner account created', { requestId: req.id, userId: String(user._id) });
+
+  return completeOnboardingLogin(req, res, user, { method: 'password' });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/login/password
+// ---------------------------------------------------------------------------
+/**
+ * Sign in as an owner with an email and a password.
+ *
+ * Structurally identical to loginStaff, and intentionally so — the same
+ * generic failure message, the same timing burn, the same progressive lockout.
+ * The only difference is what resolves the account: an email rather than a
+ * terminal's device cookie.
+ *
+ * An administrator who signed up with Google and never set a password reaches
+ * the wrong-password branch rather than a distinguishable one, because
+ * verifyPassword returns false when no hash is loaded instead of throwing. So
+ * this door cannot be used to discover which door an account actually uses.
+ */
+export const loginPassword = asyncHandler(async (req, res) => {
+  const { email, password } = req.body;
+
+  // Unscoped: this IS the resolution. Calling the static without the wrapper
+  // would throw TenantContextMissing — a 500, not a 401.
+  const user = await runUnscoped('password sign-in: email -> account', async () =>
+    User.findActiveAdminByEmail(email));
+
+  if (!user) {
+    await burnTiming(password);
+    await recordFailure(req, { reason: 'unknown-email', identifier: email });
+    throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
+  }
+
+  if (user.isLocked) {
+    await recordFailure(req, { userId: user._id, reason: 'locked', identifier: email });
+    throw ApiError.tooManyRequests(LOCKED_MESSAGE);
+  }
+
+  const ok = await user.verifyPassword(password);
+
+  if (!ok) {
+    const nowLocked = await user.registerFailedLogin();
+    await recordFailure(req, { userId: user._id, reason: 'bad-password', identifier: email });
+
+    if (nowLocked) {
+      await AuditLog.record(
+        {
+          actor: user._id,
+          actorName: user.name,
+          actorRole: user.role,
+          action: AUDIT_ACTION.ACCOUNT_LOCKED,
+          resource: 'User',
+          resourceId: user._id,
+          meta: { after: MAX_FAILED_ATTEMPTS },
+          // A locked account may still have no restaurant to attribute this to.
+          tenantId: user.tenantId ?? null,
+        },
+        req,
+      );
+    }
+
+    throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
+  }
+
+  // Authenticated, but possibly mid-onboarding — an owner can abandon the
+  // naming step and come back on a later day.
+  if (!user.tenantId) {
+    return completeOnboardingLogin(req, res, user, { method: 'password' });
+  }
+
+  return runInTenant(user.tenantId, async () => {
+    const tenant = await Tenant.findById(user.tenantId).lean();
+
+    if (!tenant?.isActive) {
+      await recordFailure(req, {
+        userId: user._id,
+        reason: 'restaurant-inactive',
+        identifier: email,
+      });
+      throw ApiError.unauthorized(GENERIC_LOGIN_FAILURE);
+    }
+
+    return completeLogin(req, res, user, { tenant, method: 'password' });
   });
 });
 
@@ -487,7 +834,7 @@ export const loginStaff = asyncHandler(async (req, res) => {
     device.save().catch(() => {});
 
     const tenant = await Tenant.findById(device.tenantId).lean();
-    return completeLogin(req, res, user, { tenant, device });
+    return completeLogin(req, res, user, { tenant, device, method: 'pin' });
   });
 });
 
@@ -733,4 +1080,13 @@ export const terminalInfo = asyncHandler(async (req, res) => {
   });
 });
 
-export default { loginGoogle, loginStaff, refresh, logout, me, terminalInfo };
+export default {
+  loginGoogle,
+  registerWithPassword,
+  loginPassword,
+  loginStaff,
+  refresh,
+  logout,
+  me,
+  terminalInfo,
+};

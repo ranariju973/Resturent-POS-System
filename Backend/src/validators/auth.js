@@ -41,6 +41,71 @@ export const staffLoginSchema = z
   .strict();
 
 /**
+ * ── Password bounds, shared by signup and sign-in ──────────────────────────
+ *
+ * The 72 is not a round number: bcrypt truncates its input at 72 BYTES and
+ * silently ignores everything after. A longer password is therefore not a
+ * stronger one, it only feels like it — and accepting it would mean two
+ * different passphrases sharing a hash. Refusing it says so honestly.
+ *
+ * It is also the same CPU-exhaustion guard the Google credential's max(4096)
+ * embodies: this is an unauthenticated endpoint handing a string to a
+ * deliberately slow hash function.
+ */
+const PASSWORD_MAX = 72;
+
+/** Floor for a NEW password. Not applied at sign-in — see passwordLoginSchema. */
+const PASSWORD_MIN = 10;
+
+const emailField = z
+  .string({ required_error: 'Email is required' })
+  .trim()
+  .toLowerCase()
+  .min(1, 'Email is required')
+  .max(254, 'Email is too long')
+  .email('Enter a valid email address');
+
+/**
+ * Owner signup — the second administrator door, alongside Google.
+ *
+ * Creates an account with no restaurant, exactly as a first-time Google
+ * sign-in does; naming the restaurant is the next step either way.
+ */
+export const registerSchema = z
+  .object({
+    name: z
+      .string({ required_error: 'Name is required' })
+      .trim()
+      .min(2, 'Name must be at least 2 characters')
+      .max(80, 'Name cannot exceed 80 characters'),
+    email: emailField,
+    password: z
+      .string({ required_error: 'Password is required' })
+      .min(PASSWORD_MIN, `Password must be at least ${PASSWORD_MIN} characters`)
+      .max(PASSWORD_MAX, `Password cannot exceed ${PASSWORD_MAX} characters`),
+  })
+  .strict();
+
+/**
+ * Owner sign-in.
+ *
+ * Deliberately does NOT apply PASSWORD_MIN. A login form is not the place to
+ * publish the policy — rejecting a 9-character attempt before checking it
+ * tells an attacker the floor for free, and it would strand any account whose
+ * password predates a future change to that floor. Only the bcrypt ceiling is
+ * enforced, because that one is about what the hash can physically read.
+ */
+export const passwordLoginSchema = z
+  .object({
+    email: emailField,
+    password: z
+      .string({ required_error: 'Password is required' })
+      .min(1, 'Password is required')
+      .max(PASSWORD_MAX, 'Password cannot exceed 72 characters'),
+  })
+  .strict();
+
+/**
  * Logout body. `allDevices` ends every session for the user rather than just
  * the current one.
  */
@@ -50,4 +115,10 @@ export const logoutSchema = z
   })
   .strict();
 
-export default { googleLoginSchema, staffLoginSchema, logoutSchema };
+export default {
+  googleLoginSchema,
+  staffLoginSchema,
+  registerSchema,
+  passwordLoginSchema,
+  logoutSchema,
+};

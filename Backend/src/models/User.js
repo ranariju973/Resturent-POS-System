@@ -128,15 +128,22 @@ const userSchema = new mongoose.Schema(
     },
 
     /**
-     * Which credential this account actually authenticates with.
+     * How this account was FIRST created — not an exclusive claim about how it
+     * signs in.
      *
-     * 'google' for owners and administrators, 'pin' for staff at a terminal.
-     * Recorded rather than inferred from which hash happens to be populated,
-     * so the pre-validate check below can state the invariant directly.
+     * 'google' and 'password' are both owner/administrator doors, 'pin' is
+     * staff at a terminal. The two admin doors are not mutually exclusive: an
+     * account created with a password can later gain a googleId (see the
+     * linking branch in authController.loginGoogle), after which either
+     * credential opens it.
+     *
+     * That is why the login audit records the method it actually used rather
+     * than reading it back from here — a linked account would otherwise report
+     * every sign-in as whichever door it was born with.
      */
     authProvider: {
       type: String,
-      enum: ['google', 'pin'],
+      enum: ['google', 'password', 'pin'],
       default: 'pin',
       index: true,
     },
@@ -303,13 +310,13 @@ userSchema.pre('validate', function validateCredentialShape(next) {
 
     /*
      * The invariant is unchanged in substance — an account that can never be
-     * authenticated is refused at write time — but the credential moved.
-     * Administrators sign in with Google, which stores no password, so
-     * googleId is what proves the account is reachable. A row with neither is
-     * still refused.
+     * authenticated is refused at write time — but there are now two ways to
+     * satisfy it. An administrator reaches their restaurant either through
+     * Google or through a password of their own, so a row holding neither is
+     * still refused and a row holding either is fine.
      */
     if (this.isNew && !this.googleId && !this.passwordHash) {
-      return next(new Error('Admin accounts require a Google identity'));
+      return next(new Error('Admin accounts require a Google identity or a password'));
     }
   }
 
@@ -547,7 +554,43 @@ userSchema.statics.pinTaken = async function pinTaken(pin, exceptId = null) {
   return Boolean(await this.exists(filter));
 };
 
-/** Load an admin by email with the credential fields attached. */
+/**
+ * Is this address already spoken for?
+ *
+ * ── Deliberately unfiltered ────────────────────────────────────────────────
+ * No `role`, no `isActive`. A deactivated account still owns its address, and
+ * a cashier row carrying one would still collide with an owner signing up on
+ * it under the {tenantId, email} index. Anything narrower would pass here and
+ * then fail at write time, which is the exact confusion this prevents — the
+ * same reasoning as `pinTaken` above.
+ *
+ * ── This is the guard, not merely a courtesy ───────────────────────────────
+ * Unlike `pinTaken`, no index fully backs this one. `email` is unique PER
+ * RESTAURANT, so it stops a second tenant-less signup on the same address
+ * (they share the `tenantId: null` bucket) but NOT a signup on an address an
+ * established owner already holds in their own restaurant. This check is what
+ * closes that gap, and `registerWithPassword` still handles the duplicate-key
+ * error for the narrow race between this read and its write.
+ *
+ * MUST be called inside runUnscoped: signup has no session, so there is no
+ * restaurant to scope by — looking across all of them is the point.
+ *
+ * @param {string} email
+ * @returns {Promise<boolean>}
+ */
+userSchema.statics.emailTaken = async function emailTaken(email) {
+  if (typeof email !== 'string' || email.trim() === '') return false;
+  return Boolean(await this.exists({ email: email.trim().toLowerCase() }));
+};
+
+/**
+ * Load an admin by email with the credential fields attached.
+ *
+ * MUST be called inside runUnscoped, for the same reason as the Google
+ * identity lookup: a password sign-in has no session yet, so the restaurant is
+ * a property OF the row being found rather than a filter that could narrow it.
+ * Called without that wrapper it throws TenantContextMissing, not a 401.
+ */
 userSchema.statics.findActiveAdminByEmail = function findActiveAdminByEmail(email) {
   if (typeof email !== 'string') return Promise.resolve(null);
   return this.findOne({

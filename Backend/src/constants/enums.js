@@ -158,6 +158,17 @@ export const AUDIT_ACTION = Object.freeze({
   LOGIN_SUCCESS: 'auth.login.success',
   LOGIN_FAILURE: 'auth.login.failure',
   LOGOUT: 'auth.logout',
+
+  /*
+   * An account's password was discarded because a verified Google identity
+   * claimed the same address.
+   *
+   * Its own action, not a variant of a login: it is a credential being
+   * destroyed, and it happens without the account holder asking for it. If
+   * anyone ever asks "why did my password stop working", this is the answer,
+   * and it needs to be findable.
+   */
+  PASSWORD_RETIRED: 'auth.password.retired',
   ACCOUNT_LOCKED: 'auth.account.locked',
 
   USER_CREATE: 'user.create',
@@ -220,6 +231,17 @@ export const AUDIT_ACTION = Object.freeze({
   // a linked device is what lets staff PINs be matched at all.
   DEVICE_LINK: 'device.link',
   DEVICE_UNLINK: 'device.unlink',
+
+  /*
+   * An existing terminal was re-bound to a different browser.
+   *
+   * Recorded separately from DEVICE_LINK because the consequence is different:
+   * a link grants a new machine the ability to resolve this restaurant, while
+   * a RE-link also revokes that ability from whichever machine held it before.
+   * A trail that called both "linked" would hide the revocation.
+   */
+  DEVICE_RELINK: 'device.relink',
+  DEVICE_RENAME: 'device.rename',
 });
 
 export const AUDIT_ACTION_VALUES = Object.freeze(Object.values(AUDIT_ACTION));

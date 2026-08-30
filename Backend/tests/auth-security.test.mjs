@@ -109,17 +109,21 @@ t('single shared failure message', /GENERIC_LOGIN_FAILURE\s*=\s*'Invalid credent
 const failureThrows = ctlSrc.match(/ApiError\.unauthorized\(GENERIC_LOGIN_FAILURE\)/g) || [];
 t(`every login failure path uses it (${failureThrows.length} sites)`, failureThrows.length >= 4);
 /*
- * Only the PIN path burns time now.
+ * Both secret-comparing doors burn time; the Google one does not need to.
  *
- * Google sign-in needs no such defence and gains nothing from one: there is no
- * stored secret to compare, so there is no fast path for a missing account and
- * no slow path for a present one. The ID token already proves who the caller
- * is, which is why the handler can answer immediately without becoming an
- * enumeration oracle.
+ * A PIN and a password are both compared against a stored hash, so a missing
+ * account returns in ~1ms and a present one in ~250ms — a gap that alone
+ * reveals which accounts exist. Hashing a decoy on the miss closes it.
+ *
+ * Google sign-in gains nothing from the same treatment: there is no stored
+ * secret to compare, so there is no fast path and no slow one. The ID token
+ * already proves who the caller is, which is why that handler can answer
+ * immediately without becoming an enumeration oracle.
  */
 t('unknown PIN still burns bcrypt time (timing oracle closed)',
   /burnTiming/.test(ctlSrc) && /await burnTiming\(pin\)/.test(ctlSrc));
-t('no password path remains to defend', !/burnTiming\(password\)/.test(ctlSrc));
+t('unknown email still burns bcrypt time (timing oracle closed)',
+  /await burnTiming\(password\)/.test(ctlSrc));
 t('decoy hash uses the real bcrypt cost', /decoyHashPromise[\s\S]{0,120}BCRYPT_COST/.test(ctlSrc));
 t('lockout does not confirm the account exists (generic throw after lock)',
   /nowLocked[\s\S]{0,600}ApiError\.unauthorized\(GENERIC_LOGIN_FAILURE\)/.test(ctlSrc));
@@ -155,9 +159,19 @@ t('login limiter window is 15 minutes', /loginLimiter[\s\S]{0,300}windowMs:\s*15
 t('successful logins do not consume the budget', /skipSuccessfulRequests:\s*true/.test(rlSrc));
 t('IPv6 normalised so prefix rotation cannot reset the counter', /ipKeyGenerator/.test(rlSrc));
 t('google sign-in route is limited', /'\/google',\s*loginLimiter/.test(routeSrc));
-// The password door is gone, not merely unused: a dormant route is one edit
-// away from being a second way in that nobody is reviewing.
-t('there is no admin password route at all', !/login\/admin/.test(routeSrc));
+/*
+ * The password door is back, so it is asserted rather than forbidden.
+ *
+ * Signup gets its OWN limiter, and that is the assertion that matters: on a
+ * login endpoint a success proves the caller is legitimate and is skipped, but
+ * on a signup endpoint the success IS the abuse — each one writes a durable
+ * admin row. A signup route wearing loginLimiter would be unbounded against
+ * exactly the traffic it needs to bound.
+ */
+t('password login route is limited', /'\/login\/password',\s*\n?\s*loginLimiter/.test(routeSrc));
+t('signup route is limited', /'\/register',\s*signupLimiter/.test(routeSrc));
+t('signup successes consume the budget, unlike logins',
+  /signupLimiter[\s\S]{0,400}skipSuccessfulRequests:\s*false/.test(rlSrc));
 t('staff login route is limited', /login\/staff',\s*loginLimiter/.test(routeSrc));
 t('refresh route is limited', /refresh',\s*refreshLimiter/.test(routeSrc));
 
@@ -170,7 +184,19 @@ t('every auth schema is .strict() (unknown keys rejected)',
  * CPU-exhaustion vector. Real Google ID tokens run well under 2KB.
  */
 t('google credential length capped (CPU-exhaustion guard)', /max\(4096/.test(valSrc));
-t('no password schema remains', !/password/i.test(valSrc));
+/*
+ * 72 bytes is where bcrypt silently truncates. Accepting more would mean two
+ * different passphrases sharing a hash while the longer one felt stronger —
+ * and it is the same CPU-exhaustion guard as the Google credential's cap,
+ * since this is an unauthenticated string handed to a deliberately slow hash.
+ */
+t("password capped at bcrypt's 72-byte truncation point",
+  /PASSWORD_MAX\s*=\s*72/.test(valSrc) && (valSrc.match(/max\(PASSWORD_MAX/g) || []).length === 2);
+t('a new password has a minimum length', /min\(PASSWORD_MIN/.test(valSrc));
+t('sign-in does NOT enforce the signup minimum (policy is not published)',
+  /passwordLoginSchema[\s\S]{0,400}min\(1,/.test(valSrc));
+t('email is normalised before it is used as a key',
+  /emailField[\s\S]{0,200}\.toLowerCase\(\)/.test(valSrc));
 t('PIN constrained to exact digit count', /\\\\d\{\$\{PIN_LENGTH\}\}/.test(valSrc) || /PIN_LENGTH/.test(valSrc));
 t('all login routes run validate()', (routeSrc.match(/validate\(\{ body:/g) || []).length >= 3);
 t('/me is behind requireAuth', /get\('\/me',\s*requireAuth\(\)/.test(routeSrc));
