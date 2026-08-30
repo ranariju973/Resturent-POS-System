@@ -113,17 +113,40 @@ export function Billing() {
 
   const count = lines.reduce((sum, l) => sum + l.line.qty, 0);
 
-  // The phone is what identifies the customer, so it is the required field.
-  // The name is only required when the number is one we have never seen — for
-  // a returning customer the server already holds it and ignores what we send.
+  /*
+   * ── The customer is optional ─────────────────────────────────────────────
+   * A walk-in paying cash has no reason to hand over a phone number, and a
+   * till that refuses to open their bill until they do does not collect better
+   * data — it collects `000000` and `asdf`, typed by a cashier with a queue
+   * waiting. An order with no customer is already a first-class thing here:
+   * `Order.customer` is nullable, and the payload simply omits the field.
+   *
+   * What is still enforced is CONSISTENCY once someone starts filling it in,
+   * because a half-entered customer is worse than none:
+   *
+   *   • a phone with fewer than 6 digits identifies nobody, and the server
+   *     refuses it — better to say so under the field than after the tap;
+   *   • a number the restaurant has never seen is refused without a name to
+   *     file it under (see resolveInlineCustomer), deliberately, so the
+   *     customer list does not fill up with "Guest";
+   *   • a name typed with no phone would be silently dropped, since the phone
+   *     is what identity is keyed on. Losing something a cashier typed is not
+   *     an acceptable way to be permissive.
+   */
   const phoneDigits = state.customerPhone.replace(/\D/g, '');
   // A customer picked from the list is attached by id, so the order carries no
   // digits and needs none. Counting characters in the masked display instead
   // would pass or fail on how long the number happens to be, which is not a
   // rule anyone intended.
-  const phoneMissing = !state.customerId && phoneDigits.length < 6;
   const phonePicked = state.customerPhoneMasked !== '';
-  const nameMissing = !state.customerKnown && state.customer.trim().length < 2;
+  const phoneStarted = !state.customerId && phoneDigits.length > 0;
+  const phoneTooShort = phoneStarted && phoneDigits.length < 6;
+  const nameEntered = state.customer.trim().length > 0;
+
+  // Only once a number is on the bill: with no customer at all, there is
+  // nothing for a name to belong to.
+  const nameMissing = phoneStarted && !state.customerKnown && state.customer.trim().length < 2;
+  const nameOrphaned = !phoneStarted && !state.customerId && nameEntered;
 
   // Dine-in without a table is refused by the server, so the button must not
   // pretend otherwise.
@@ -132,13 +155,15 @@ export function Billing() {
   const blocker =
     count === 0
       ? 'Add an item to bill'
-      : phoneMissing
-        ? 'Enter a phone number'
+      : phoneTooShort
+        ? 'Phone needs at least 6 digits — or clear it'
         : nameMissing
-          ? 'Enter the customer name'
-          : tableMissing
-            ? 'Pick a table for dine-in'
-            : null;
+          ? 'Name this new number, or clear the phone'
+          : nameOrphaned
+            ? 'Add a phone number, or clear the name'
+            : tableMissing
+              ? 'Pick a table for dine-in'
+              : null;
 
   const canGenerate = !blocker && !state.checkoutPending;
 
@@ -555,7 +580,7 @@ export function Billing() {
             <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
               <FieldShell
                 label="Phone"
-                warn={phoneMissing}
+                warn={phoneTooShort}
                 tint={phonePicked}
                 hint={
                   state.customerLookupThrottled
@@ -564,7 +589,12 @@ export function Billing() {
                       ? 'checking…'
                       : phonePicked
                         ? 'attached'
-                        : ''
+                        : // Said on the field itself, not only in the button's
+                          // blocker text — a cashier should be able to see that
+                          // it can be skipped without first trying to skip it.
+                          phoneStarted
+                          ? ''
+                          : 'optional'
                 }
               >
                 <input
@@ -674,12 +704,21 @@ export function Billing() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <FieldShell
                 label="Name"
+                warn={nameMissing || nameOrphaned}
                 tint={state.customerKnown}
-                hint={state.customerKnown ? 'returning' : ''}
+                hint={
+                  state.customerKnown
+                    ? 'returning'
+                    : // Required only against a number nobody has seen before,
+                      // which is the one case the server will refuse.
+                      phoneStarted
+                      ? 'required for a new number'
+                      : 'optional'
+                }
               >
                 <input
                   type="text"
-                  placeholder={state.customerPhone ? 'Aarav Mehta' : 'Phone first'}
+                  placeholder={phoneStarted ? 'Aarav Mehta' : 'Walk-in — leave blank'}
                   value={state.customer}
                   onChange={(e) => actions.setCustomerName(e.target.value)}
                   style={compactInput}
