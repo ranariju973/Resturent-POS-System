@@ -245,7 +245,52 @@ t('the detected format is recorded for the caller',
 t('content that is not an image at all is refused whatever it claims',
   verify('image/jpeg', pdf).error?.status === 400);
 t('...and the message names what IS accepted',
-  /JPEG, PNG or WebP/.test(verify('image/jpeg', pdf).error?.message ?? ''));
+  /JPEG, PNG, WebP or HEIC/.test(verify('image/jpeg', pdf).error?.message ?? ''));
+
+// ---------------------------------------------------------------------------
+console.log('\n--- HEIC: what an iPhone shoots by default ---');
+/*
+ * HEIC was refused outright until this was added, which meant the most common
+ * camera in use could not put a photo on the menu. The container is ISO BMFF:
+ * bytes 4-7 are 'ftyp' and 8-11 are the brand. The brand is what matters —
+ * MP4 and MOV share the same 'ftyp' header, so accepting on 'ftyp' alone would
+ * let a video through and leave Cloudinary to refuse it later.
+ */
+const isoBmff = (brand) => {
+  const b = Buffer.alloc(32);
+  Buffer.from([0x00, 0x00, 0x00, 0x20]).copy(b, 0);
+  Buffer.from('ftyp', 'ascii').copy(b, 4);
+  Buffer.from(brand, 'ascii').copy(b, 8);
+  return b;
+};
+
+for (const brand of ['heic', 'heix', 'hevc', 'mif1', 'msf1']) {
+  t(`HEIF brand '${brand}' is detected as heic`, detectImageFormat(isoBmff(brand)) === 'heic');
+}
+t('an uppercase brand is still detected (spelling is not load-bearing)',
+  detectImageFormat(isoBmff('HEIC')) === 'heic');
+
+for (const declared of ['image/heic', 'image/heif', 'image/heic-sequence']) {
+  t(`a HEIC declared ${declared} is accepted`, verify(declared, isoBmff('heic')).error === null);
+}
+t('a HEIC the browser declined to label is accepted on its bytes',
+  verify('', isoBmff('mif1')).error === null);
+t('image/heif over mif1 bytes is not treated as a contradiction',
+  verify('image/heif', isoBmff('mif1')).error === null);
+t('the detected format is reported as heic so the upload can be transcoded',
+  verify('image/heic', isoBmff('heic')).detected === 'heic');
+
+// The reason the brand is checked rather than just 'ftyp'.
+for (const brand of ['isom', 'mp42', 'qt  ', 'avc1']) {
+  t(`a video container ('${brand}') is still refused`,
+    detectImageFormat(isoBmff(brand)) === null);
+}
+t('a video declared image/heic is refused on its bytes',
+  verify('image/heic', isoBmff('isom')).error?.status === 400);
+t('a HEIC mislabelled image/jpeg is still a contradiction',
+  verify('image/jpeg', isoBmff('heic')).error?.status === 400);
+t('a truncated ftyp header cannot be read as an image',
+  detectImageFormat(Buffer.from('\x00\x00\x00 ftyphei', 'binary')) === null);
 
 // fileFilter defers its rejection so the request drains and the JSON 400 is
 // actually readable by the browser — see the note on that function.

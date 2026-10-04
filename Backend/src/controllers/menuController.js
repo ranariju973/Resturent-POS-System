@@ -132,7 +132,12 @@ export const createItem = asyncHandler(async (req, res) => {
 
   let uploaded = null;
   if (req.file) {
-    uploaded = await uploadImageBuffer(req.file.buffer);
+    // sourceFormat comes from verifyImageContent's magic-byte read, not from
+    // the client's declared type, so a HEIC is transcoded on the strength of
+    // what the bytes actually are.
+    uploaded = await uploadImageBuffer(req.file.buffer, {
+      sourceFormat: req.file.detectedFormat,
+    });
   }
 
   const item = new MenuItem({
@@ -195,7 +200,9 @@ export const updateItem = asyncHandler(async (req, res) => {
 
   let uploaded = null;
   if (req.file) {
-    uploaded = await uploadImageBuffer(req.file.buffer);
+    uploaded = await uploadImageBuffer(req.file.buffer, {
+      sourceFormat: req.file.detectedFormat,
+    });
     item.imageUrl = uploaded.url;
     item.imagePublicId = uploaded.publicId;
   } else if (removeImage) {

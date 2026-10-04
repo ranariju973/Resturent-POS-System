@@ -51,6 +51,26 @@ const MIME_TO_FORMAT = new Map([
   ['image/png', 'png'],
   ['image/x-png', 'png'],
   ['image/webp', 'webp'],
+  /*
+   * HEIC/HEIF — what an iPhone produces by default.
+   *
+   * Refusing these meant the most common camera on the planet could not add a
+   * photo to the menu: the file was rejected before anything looked at it, and
+   * the owner had no way to know that converting it would help. They are
+   * normalised to one format name ('heic') rather than kept distinct because
+   * the container is shared and the declared spelling is unreliable — iOS
+   * sends image/heic, some Android gallery apps and Finder send image/heif for
+   * a byte-identical file. Treating them as different formats would make the
+   * contradiction check below fire on a perfectly good photograph.
+   *
+   * These are stored as JPEG, not as HEIC — see config/cloudinary.js. Only
+   * Safari renders HEIC, so keeping the original would produce menu images
+   * that are invisible in Chrome.
+   */
+  ['image/heic', 'heic'],
+  ['image/heif', 'heic'],
+  ['image/heic-sequence', 'heic'],
+  ['image/heif-sequence', 'heic'],
 ]);
 
 /**
@@ -65,7 +85,7 @@ const MIME_TO_FORMAT = new Map([
 const UNDECLARED_MIME = new Set(['', 'application/octet-stream', 'binary/octet-stream']);
 
 /** What a person needs to be told when their file is refused. */
-const ACCEPTED_MESSAGE = 'Image must be a JPEG, PNG or WebP';
+const ACCEPTED_MESSAGE = 'Image must be a JPEG, PNG, WebP or HEIC';
 
 /**
  * Magic-byte signatures. The authoritative check.
@@ -79,8 +99,31 @@ const SIGNATURES = [
   { format: 'webp', offset: 0, bytes: [0x52, 0x49, 0x46, 0x46] }, // 'RIFF'
 ];
 
+/**
+ * HEIF brands this accepts, read from bytes 8-11.
+ *
+ * A HEIC file is an ISO base media container: bytes 0-3 are the box length,
+ * 4-7 are the literal 'ftyp', and 8-11 are the brand that says what the
+ * container actually holds. The brand is the only reliable discriminator —
+ * MP4 and MOV share the same 'ftyp' header, so matching on 'ftyp' alone would
+ * accept a video as an image and leave Cloudinary to reject it later.
+ *
+ * `heic`/`heix` are a single still image, `hevc`/`hevx` a sequence, `heim`,
+ * `heis`, `hevm`, `hevs` the multi-view variants, and `mif1`/`msf1` the
+ * generic HEIF profiles an iPhone emits for edited photos and screenshots.
+ */
+const HEIF_BRANDS = new Set([
+  'heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1',
+]);
+
 const matchesAt = (buffer, offset, bytes) =>
   bytes.every((b, i) => buffer[offset + i] === b);
+
+/** 'ftyp' at offset 4, with one of the HEIF brands at offset 8. */
+function isHeif(buffer) {
+  if (buffer.toString('ascii', 4, 8) !== 'ftyp') return false;
+  return HEIF_BRANDS.has(buffer.toString('ascii', 8, 12).toLowerCase());
+}
 
 /**
  * Identify a buffer by its content.
@@ -89,6 +132,10 @@ const matchesAt = (buffer, offset, bytes) =>
  */
 export function detectImageFormat(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 12) return null;
+
+  // Checked before the prefix table: a HEIF container's first four bytes are a
+  // box length, not a signature, so there is nothing for the table to match.
+  if (isHeif(buffer)) return 'heic';
 
   for (const sig of SIGNATURES) {
     if (!matchesAt(buffer, sig.offset, sig.bytes)) continue;

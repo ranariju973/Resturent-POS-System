@@ -127,7 +127,7 @@ export function ItemModal() {
             Item photo
           </span>
           <span style={{ fontSize: 12, fontWeight: 500, color: 'rgba(0,0,0,0.45)' }}>
-            JPG, PNG or WebP. Large photos are shrunk automatically.
+            JPG, PNG, WebP or iPhone HEIC. Large photos are shrunk automatically.
           </span>
         </span>
 
@@ -171,11 +171,13 @@ export function ItemModal() {
           /*
            * Named formats rather than `image/*`.
            *
-           * `image/*` invites the HEIC files an iPhone produces by default and
-           * the server will always refuse, so the picker offered a choice that
-           * could only end in an error. The extension list rides alongside the
-           * MIME types because extension matching is what actually works on
-           * Android and older Windows, where the MIME registry is unreliable.
+           * `image/*` would also offer GIF, BMP, SVG and TIFF, none of which
+           * the server stores, so the picker would present choices that could
+           * only end in an error. HEIC is on the list: an iPhone shoots it by
+           * default, and the server now transcodes it to JPEG on ingest. The
+           * extension list rides alongside the MIME types because extension
+           * matching is what actually works on Android and older Windows,
+           * where the MIME registry is unreliable.
            */
           accept={IMAGE_ACCEPT}
           onChange={(e) => {

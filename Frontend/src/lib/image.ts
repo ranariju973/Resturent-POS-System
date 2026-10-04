@@ -25,7 +25,7 @@
  */
 
 /** What the server will store. Keep in sync with Backend/src/middleware/upload.js. */
-const ACCEPTED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'] as const;
+const ACCEPTED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif'] as const;
 
 /**
  * Accepted `file.type` values, including the aliases different operating
@@ -39,7 +39,32 @@ const ACCEPTED_TYPES = new Set([
   'image/png',
   'image/x-png',
   'image/webp',
+  // An iPhone's default. The server transcodes these to JPEG on ingest.
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence',
 ]);
+
+/**
+ * Types this browser cannot draw to a canvas, so cannot downscale.
+ *
+ * Safari decodes HEIC natively and goes through the normal shrink path.
+ * Chrome and Firefox cannot, so the original is uploaded untouched and the
+ * server does the conversion. That is why HEIC is exempt from the "too large"
+ * refusal below: rejecting it here would reinstate exactly the dead end this
+ * change removes, on the browsers least able to do anything about it.
+ */
+const MAY_NOT_DECODE = new Set([
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence',
+]);
+
+const isHeic = (file: File): boolean =>
+  MAY_NOT_DECODE.has(file.type.toLowerCase())
+  || ['heic', 'heif'].includes(extensionOf(file.name));
 
 /** Longest edge, in pixels, after downscaling. */
 const MAX_EDGE = 1600;
@@ -129,13 +154,31 @@ const dimensionsOf = (source: ImageBitmap | HTMLImageElement) => ({
  */
 export async function prepareImage(file: File): Promise<File> {
   if (!isAcceptedType(file)) {
-    throw new ImageError('Choose a JPG, PNG or WebP image.');
+    throw new ImageError('Choose a JPG, PNG, WebP or HEIC image.');
   }
 
-  const source = await decode(file);
+  /*
+   * A HEIC this browser cannot decode is sent as-is.
+   *
+   * Chrome and Firefox have no HEIC decoder, so there is no way to measure or
+   * shrink the file here — but the server transcodes it to JPEG on ingest, so
+   * passing the original through works. Throwing instead would mean an iPhone
+   * photo is refused on a desktop browser for a reason the owner cannot act
+   * on, which is the failure this whole path exists to prevent.
+   */
+  let source: ImageBitmap | HTMLImageElement;
+  try {
+    source = await decode(file);
+  } catch (err) {
+    if (isHeic(file)) return file;
+    throw err;
+  }
+
   const { width, height } = dimensionsOf(source);
 
   if (!width || !height) {
+    if ('close' in source) source.close();
+    if (isHeic(file)) return file;
     throw new ImageError('That image could not be read. Try another file.');
   }
 
@@ -174,5 +217,7 @@ export const IMAGE_ACCEPT = [
   'image/jpeg',
   'image/png',
   'image/webp',
+  'image/heic',
+  'image/heif',
   ...ACCEPTED_EXTENSIONS.map((e) => `.${e}`),
 ].join(',');
