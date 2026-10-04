@@ -22,6 +22,7 @@
  * refused. It can contradict the bytes, and it can let multer bail out early
  * on something obviously wrong. It cannot outvote them.
  */
+import { AsyncResource } from 'node:async_hooks';
 import multer from 'multer';
 import { env } from '../config/env.js';
 import { ApiError } from '../utils/apiResponse.js';
@@ -203,8 +204,28 @@ const upload = multer({
 export function uploadImage(fieldName = 'image') {
   const handler = upload.single(fieldName);
 
+  /*
+   * ── Why the callback is bound ────────────────────────────────────────────
+   * multer calls back from busboy's `finish` event. Stream events run in the
+   * async context of whoever pushed the data — the incoming socket — not the
+   * context multer was called from, so the tenant that requireAuth entered
+   * with runInTenant was gone by the time `next()` ran. The first query
+   * downstream (Category.findOne in createItem) then had no tenant and the
+   * tenant guard threw: a 500 on every image upload.
+   *
+   * It only happened when the body was still arriving after auth finished,
+   * which made it look platform-specific. With a cold auth cache, auth awaited
+   * the database long enough for the body to land in the buffer, and busboy
+   * drained it inside the right context. With a warm cache, or a slower
+   * connection, it did not.
+   *
+   * AsyncResource.bind pins the callback to the context it was CREATED in,
+   * here, inside the tenant, so everything after multer runs as the right
+   * restaurant regardless of where the stream's events came from. See
+   * tests/upload-tenant-context.test.mjs.
+   */
   return (req, res, next) =>
-    handler(req, res, (err) => {
+    handler(req, res, AsyncResource.bind((err) => {
       if (!err) return next();
 
       if (err instanceof multer.MulterError) {
@@ -231,7 +252,7 @@ export function uploadImage(fieldName = 'image') {
         }
       }
       return next(err);
-    });
+    }));
 }
 
 /**
