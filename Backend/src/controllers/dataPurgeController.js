@@ -11,7 +11,6 @@
  * write, the Cloudinary calls are batched, and the audit entry is one row
  * carrying the count.
  */
-import mongoose from 'mongoose';
 import { MenuItem } from '../models/MenuItem.js';
 import { Category } from '../models/Category.js';
 import { Table } from '../models/Table.js';
