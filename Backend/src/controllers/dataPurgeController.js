@@ -168,9 +168,9 @@ export const purgeReports = asyncHandler(async (req, res) => {
   // Counter uses a composite _id like 'order:<tenantId>:2026-08-04'.
   // It is NOT tenant-scoped via the plugin, so we match by regex.
   const tenantId = String(req.tenantId);
-  const counterResult = await Counter.deleteMany(mongoose.trusted({
-    _id: { $regex: new RegExp(`:${tenantId}(:|$)`) },
-  }));
+  const counterResult = await Counter.collection.deleteMany({
+    _id: new RegExp(`:${tenantId}(:|$)`),
+  });
 
   await AuditLog.record(
     {
