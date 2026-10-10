@@ -36,6 +36,9 @@ const Reports = lazy(() => import('./screens/Reports').then((m) => ({ default: m
 const TableManagement = lazy(() =>
   import('./screens/TableManagement').then((m) => ({ default: m.TableManagement })),
 );
+const DataPurge = lazy(() =>
+  import('./screens/DataPurge').then((m) => ({ default: m.DataPurge })),
+);
 
 const SCREENS = {
   dashboard: Dashboard,
@@ -47,6 +50,7 @@ const SCREENS = {
   reports: Reports,
   employees: Employees,
   printer: PrinterSettings,
+  datapurge: DataPurge,
 } as const;
 
 /**

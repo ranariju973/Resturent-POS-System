@@ -40,7 +40,7 @@ import settingsRoutes from './src/routes/settings.js';
 import attendanceRoutes from './src/routes/attendance.js';
 import payrollRoutes from './src/routes/payroll.js';
 import auditRoutes from './src/routes/audit.js';
-
+import dataPurgeRoutes from './src/routes/dataPurge.js';
 const app = express();
 
 // Behind a reverse proxy (nginx, Render, Railway, Fly) req.ip must come from
@@ -191,6 +191,7 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/audit-logs', auditRoutes);
+app.use('/api/data-purge', dataPurgeRoutes);
 
 // --- Fallbacks (must stay last) -------------------------------------------
 app.use(notFoundHandler);

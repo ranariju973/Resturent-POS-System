@@ -242,6 +242,11 @@ export const AUDIT_ACTION = Object.freeze({
    */
   DEVICE_RELINK: 'device.relink',
   DEVICE_RENAME: 'device.rename',
+
+  // Bulk data purge — admin clearing an entire section of restaurant data.
+  // One entry per category purged, not one per document, so a purge of 400
+  // menu items produces one audit row, not 400.
+  DATA_PURGE: 'data.purge',
 });
 
 export const AUDIT_ACTION_VALUES = Object.freeze(Object.values(AUDIT_ACTION));

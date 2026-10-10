@@ -52,6 +52,7 @@ export const PERMISSIONS = {
   USER_MANAGE: 'user:manage',
   AUDIT_VIEW: 'audit:view',
   SETTINGS_MANAGE: 'settings:manage',
+  DATA_PURGE: 'data:purge',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -71,6 +72,7 @@ export const SCREEN_PERMISSION: Record<ScreenId, Permission[]> = {
   employees: [PERMISSIONS.USER_MANAGE],
   // Operational configuration — deliberately its own grant, not user:manage.
   printer: [PERMISSIONS.SETTINGS_MANAGE],
+  datapurge: [PERMISSIONS.DATA_PURGE],
 };
 
 /** Does the session hold this permission? Missing list => nothing. */

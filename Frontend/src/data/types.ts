@@ -19,7 +19,8 @@ export type ScreenId =
   | 'customers'
   | 'reports'
   | 'employees'
-  | 'printer';
+  | 'printer'
+  | 'datapurge';
 
 export interface NavEntry {
   id: ScreenId;

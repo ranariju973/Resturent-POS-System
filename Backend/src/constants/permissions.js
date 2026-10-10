@@ -90,6 +90,14 @@ export const PERMISSIONS = Object.freeze({
    * the catalogue would no longer describe what the system actually does.
    */
   SETTINGS_MANAGE: 'settings:manage',
+
+  /**
+   * Irreversible bulk deletion of an entire data category (menu, tables,
+   * kitchen, customers, reports). A permission this destructive is its own
+   * grant rather than riding on an existing one, so granting "manage users"
+   * does not silently include "wipe the restaurant".
+   */
+  DATA_PURGE: 'data:purge',
 });
 
 export const PERMISSION_VALUES = Object.freeze(Object.values(PERMISSIONS));
