@@ -12,6 +12,7 @@ const token = signAccessToken({
   role: admin.role,
   tokenVersion: admin.tokenVersion ?? 0,
   tenantId: admin.tenantId ?? null,
+  tid: admin.tenantId ? String(admin.tenantId) : '',
 });
 
 console.log(token);
