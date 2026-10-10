@@ -11,6 +11,7 @@
  * write, the Cloudinary calls are batched, and the audit entry is one row
  * carrying the count.
  */
+import mongoose from 'mongoose';
 import { MenuItem } from '../models/MenuItem.js';
 import { Category } from '../models/Category.js';
 import { Table } from '../models/Table.js';
@@ -167,9 +168,9 @@ export const purgeReports = asyncHandler(async (req, res) => {
   // Counter uses a composite _id like 'order:<tenantId>:2026-08-04'.
   // It is NOT tenant-scoped via the plugin, so we match by regex.
   const tenantId = String(req.tenantId);
-  const counterResult = await Counter.deleteMany({
+  const counterResult = await Counter.deleteMany(mongoose.trusted({
     _id: { $regex: new RegExp(`:${tenantId}(:|$)`) },
-  });
+  }));
 
   await AuditLog.record(
     {
