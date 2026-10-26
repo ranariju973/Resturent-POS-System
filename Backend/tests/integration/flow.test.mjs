@@ -447,9 +447,9 @@ try {
 
   const rePay = await api('POST', `/api/orders/${orderId}/pay`, {
     token: cashierToken,
-    body: { paymentMethod: 'cash' },
+    body: { paymentMethod: 'card' },
   });
-  t('a paid bill cannot be paid twice', rePay.status === 409);
+  t('a repeated payment returns the existing bill without charging twice', rePay.status === 200 && rePay.body?.data?.replayed === true);
 
   const edit = await api('PATCH', `/api/orders/${orderId}/items`, {
     token: cashierToken,

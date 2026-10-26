@@ -203,24 +203,23 @@ function TablePanel() {
   const table = state.tables.find((t) => t.id === state.selTable);
   if (!table) return null;
 
-  const group = table.merge ? state.tables.filter((t) => t.merge === table.merge) : [table];
+  const primary = table.merge ?? table.id;
+  const group = state.tables.filter((t) => t.id === primary || t.merge === primary);
 
-  // Lines come from the fetched bill for the selected table. A merged group
-  // still totals from each table's own reported total, because the server
-  // keeps one order per table even when they share a tab.
+  // Every member references one shared bill; count its total once.
   const rows = (state.tableOrder?.items ?? []).map((line) => ({
     id: line.id,
     name: line.name,
     price: line.unitPrice,
     qty: line.qty,
-    from: table.name,
+    from: state.tableOrder?.tableNames?.join(' + ') || table.name,
   }));
-  const total = group.reduce((a, g) => a + g.orderTotal, 0);
+  const total = [...new Map(group.filter((member) => member.orderId).map((member) => [member.orderId, member.orderTotal])).values()].reduce((sum, amount) => sum + amount, 0);
   const mins = minutesSince(table.startedAt);
 
   const available = state.tables.filter((t) => t.status === 'available');
   const mergeCandidates = state.tables.filter(
-    (t) => t.status === 'occupied' && t.id !== table.id && !(table.merge && t.merge === table.merge),
+    (t) => t.status === 'occupied' && t.id !== table.id && !group.some((member) => member.id === t.id),
   );
 
   const billCount = state.splitCount;
@@ -406,6 +405,10 @@ function TablePanel() {
                     refuses while a bill is open, so the button simply is not
                     offered in that state.
                   */}
+                  <button type="button" className="press hv-green" style={{ ...outlinePill, width: '100%' }}
+                    onClick={() => void actions.startOrderAt(table)}>
+                    {table.orderId ? 'Open shared bill' : 'Start an order'}
+                  </button>
                   {table.status === 'occupied' && !table.orderId ? (
                     <button
                       type="button"

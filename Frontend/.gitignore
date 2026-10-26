@@ -7,3 +7,7 @@ node_modules/
 .env
 .env.local
 .env.*.local
+
+# Environment variants and backups may contain credentials.
+.env.*
+!.env.example

@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties, type ReactNode } from 'react';
+import { type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../icons/Icon';
 import { usePos } from '../store';
 import { clockTime, money, plural } from '../lib/format';
@@ -6,6 +6,8 @@ import { useIsMobile } from '../lib/useViewport';
 import { CARD_SHADOW, LoadState, StatusBadge, card, tableHeaderCell } from '../components/ui';
 import { SkeletonRows } from '../components/motion';
 import { PERMISSIONS, can } from '../lib/permissions';
+import { useOperationalRefresh } from '../lib/useOperationalRefresh';
+import { operationalWindow } from '../lib/serviceDay';
 import { OrderDetail } from '../components/OrderDetail';
 
 /** Order status colours. Voided is muted, not alarming — it is a normal outcome. */
@@ -27,10 +29,7 @@ export function Dashboard() {
   const isMobile = useIsMobile();
   const dash = state.dash;
 
-  useEffect(() => {
-    void actions.loadDashboard();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useOperationalRefresh(actions.loadDashboard, dash?.nextResetAt);
 
   // Every figure here is the server's. The previous version summed open table
   // bills, which counted unpaid tabs as takings and ignored anything already
@@ -39,7 +38,7 @@ export function Dashboard() {
   const orders = dash?.todayOrders ?? 0;
   const pending = dash?.pendingOrders ?? 0;
   const completed = dash?.completedOrders ?? 0;
-  const recent = dash?.recentOrders ?? [];
+  const recent = (dash?.recentOrders ?? []).filter((order) => Date.parse(order.createdAt) >= operationalWindow().recentSince);
   const mayDelete = can(state.user?.permissions, PERMISSIONS.ORDER_DELETE);
 
   return (
@@ -171,6 +170,7 @@ export function Dashboard() {
         >
           Recent Orders
         </h2>
+        <p style={{ margin: '0 0 12px', color: '#666', fontSize: 13 }}>Current and previous service day · resets at 4 AM IST</p>
 
         <div style={{ overflowX: 'auto' }}>
           <div style={{ ...ROW_GRID, padding: '0 12px 10px', borderBottom: '1px solid #edebe9' }}>
@@ -237,7 +237,7 @@ export function Dashboard() {
                   textAlign: 'right',
                 }}
               >
-                {clockTime(Date.parse(order.createdAt))}
+                {new Date(order.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}<br />{clockTime(Date.parse(order.createdAt))}
               </span>
             </button>
           ))}
@@ -247,10 +247,17 @@ export function Dashboard() {
             skeleton={<SkeletonRows count={4} height={64} />}
             error={state.dashError}
             empty={!state.dashLoading && !state.dashError && recent.length === 0}
-            emptyMessage="No orders yet today."
+            emptyMessage="No orders in the last two service days."
             onRetry={() => void actions.loadDashboard()}
           />
         </div>
+        {dash?.recentNextCursor ? (
+          <button type="button" disabled={state.recentLoading || state.dashLoading}
+            onClick={() => void actions.loadMoreRecent()}
+            style={{ padding: 12, border: '1px solid #00754A', borderRadius: 12, background: 'white', color: '#00754A', cursor: 'pointer' }}>
+            {state.recentLoading ? 'Loading…' : 'Load more orders'}
+          </button>
+        ) : null}
       </section>
 
       <OrderDetail mayDelete={mayDelete} />

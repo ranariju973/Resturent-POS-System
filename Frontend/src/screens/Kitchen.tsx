@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Icon } from '../icons/Icon';
 import { KDS_COLS } from '../data/seed';
 import type { Ticket } from '../data/types';
@@ -8,6 +8,7 @@ import { duration, minutesSince } from '../lib/format';
 import { CARD_SHADOW, FilterPill, LoadState, PageHeading } from '../components/ui';
 import { SkeletonRows } from '../components/motion';
 import { openBoardStream } from '../lib/kitchenApi';
+import { useOperationalRefresh } from '../lib/useOperationalRefresh';
 
 const TYPES = ['All', 'Dine-in', 'Takeaway', 'Delivery'];
 
@@ -44,7 +45,11 @@ export function Kitchen() {
   const { state, actions } = usePos();
   const isMobile = useIsMobile();
 
-  const late = state.tickets.filter(
+  const [connected, setConnected] = useState(false);
+  useOperationalRefresh(actions.loadBoard, state.kdsResetAt);
+  const liveTickets = state.tickets.filter((ticket) => ticket.expiresAt > Date.now());
+
+  const late = liveTickets.filter(
     (t) => t.status !== 'served' && minutesSince(t.placedAt) > OVERDUE_AT,
   ).length;
 
@@ -63,7 +68,7 @@ export function Kitchen() {
     let cancelled = false;
     let close: (() => void) | undefined;
 
-    void openBoardStream(() => void actions.loadBoard())
+    void openBoardStream(() => void actions.loadBoard(), setConnected)
       .then((stop) => {
         if (cancelled) stop();
         else close = stop;
@@ -80,6 +85,12 @@ export function Kitchen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (connected) return;
+    const timer = window.setInterval(() => { if (!document.hidden) void actions.loadBoard(); }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [connected, actions]);
+
   return (
     <main
       style={{
@@ -94,7 +105,7 @@ export function Kitchen() {
       <PageHeading
         wrap
         title="Kitchen Management"
-        subtitle="Status board — tickets still print to the kitchen"
+        subtitle="Service resets daily at 4 AM IST"
         right={
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: late ? '#c82014' : '#00754A' }}>
@@ -156,7 +167,7 @@ export function Kitchen() {
       </div>
 
       <LoadState
-        loading={state.kdsLoading && state.tickets.length === 0}
+        loading={state.kdsLoading && liveTickets.length === 0}
         skeleton={<SkeletonRows count={3} height={110} />}
         error={state.kdsError}
         onRetry={() => void actions.loadBoard()}
@@ -177,7 +188,7 @@ export function Kitchen() {
         }}
       >
         {KDS_COLS.map((col) => {
-          const cards = state.tickets
+          const cards = liveTickets
             .filter((t) => t.status === col.id)
             .filter((t) => state.kdsType === 'All' || t.type === state.kdsType.toLowerCase())
             .sort((a, b) => a.placedAt - b.placedAt);

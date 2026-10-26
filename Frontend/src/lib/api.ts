@@ -146,6 +146,7 @@ export function refreshSession(): Promise<boolean> {
         method: 'POST',
         credentials: 'include', // sends the httpOnly refresh cookie
         headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(75_000),
       });
 
       /*
@@ -225,7 +226,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
       headers,
       credentials: 'include',
       body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-      signal,
+      signal: signal ?? AbortSignal.timeout(75_000),
     });
   };
 

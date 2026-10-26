@@ -87,6 +87,9 @@ export interface OrderDto {
   type: OrderType;
   status: 'open' | 'paid' | 'voided';
   table: string | null;
+  tableIds: string[];
+  tableNames: string[];
+  version: number;
   customer: string | null;
   items: OrderLineDto[];
   subtotalMinor: number;
@@ -138,6 +141,7 @@ export interface TicketDto {
   status: TicketStatus;
   nextStatus: TicketStatus | null;
   placedAt: string;
+  expiresAt: string;
   readyAt: string | null;
   waitingMinutes: number;
   order: string;
@@ -231,6 +235,7 @@ export const toTicket = (dto: TicketDto): Ticket => ({
   nextStatus: dto.nextStatus,
   items: dto.items ?? [],
   placedAt: Date.parse(dto.placedAt),
+  expiresAt: Date.parse(dto.expiresAt),
   waitingMinutes: dto.waitingMinutes,
   wasRecalled: dto.wasRecalled,
   orderId: dto.order,

@@ -94,8 +94,8 @@ refreshTokenSchema.statics.issue = function issue({
   expiresAt,
   ip = '',
   userAgent = '',
-}) {
-  return this.create({
+}, { session = null } = {}) {
+  return this.create([{
     jti,
     tokenHash: hashToken(token),
     user: userId,
@@ -103,7 +103,7 @@ refreshTokenSchema.statics.issue = function issue({
     expiresAt,
     ip,
     userAgent: String(userAgent).slice(0, 300),
-  });
+  }], { session }).then(([record]) => record);
 };
 
 /**

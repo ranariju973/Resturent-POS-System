@@ -139,8 +139,8 @@ console.log('\n--- refresh rotation + reuse detection ---');
 t('stored token is hashed, never raw', /tokenHash:\s*hashToken\(token\)/.test(rtSrc));
 t('reuse of a revoked token revokes the whole family',
   /stored\.revokedAt[\s\S]{0,200}revokeFamily\(stored\.family,\s*'reuse-detected'\)/.test(ctlSrc));
-t('rotation retires the presented token', /revokedReason\s*=\s*'rotated'/.test(ctlSrc));
-t('rotation chain recorded via replacedBy', /replacedBy\s*=\s*jti/.test(ctlSrc));
+t('rotation retires the presented token', /revokedReason:\s*'rotated'/.test(ctlSrc));
+t('rotation chain recorded via replacedBy', /replacedBy:\s*issued\.jti/.test(ctlSrc));
 t('presented token re-hashed and compared', /stored\.tokenHash !== hashToken\(raw\)/.test(ctlSrc));
 t('expired stored record rejected', /stored\.expiresAt\.getTime\(\) <= Date\.now\(\)/.test(ctlSrc));
 t('refresh re-checks user is still active', /!user \|\| !user\.isActive/.test(ctlSrc));

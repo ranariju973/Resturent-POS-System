@@ -1,3 +1,4 @@
+import { runInTenant } from '../src/utils/tenantContext.js';
 /**
  * Kitchen board — Phase 8.
  *
@@ -99,6 +100,7 @@ t('bad status rejected', !ok(listTicketsSchema, { status: 'burnt' }));
 t('unknown ticket filter rejected', !ok(listTicketsSchema, { chef: 'marco' }));
 
 // ---------------------------------------------------------------------------
+await runInTenant('507f1f77bcf86cd799439099', async () => {
 console.log('\n--- event bus (running for real, no database needed) ---');
 {
   const before = listenerCount();
@@ -148,6 +150,8 @@ console.log('\n--- event bus (running for real, no database needed) ---');
   offBad();
   offGood();
 }
+
+});
 
 // ---------------------------------------------------------------------------
 console.log('\n--- stream tokens (real jwt module) ---');
@@ -249,7 +253,7 @@ t('the next status is read from the map, not the request',
   /NEXT_TICKET_STATUS\[current\.status\]/.test(code));
 t('req.body is never consulted for a status', !/req\.body[\s\S]{0,30}status/.test(code));
 t('a double-tap is guarded by the stored status',
-  /findOneAndUpdate\(\s*\n?\s*\{ _id: current\._id, status: current\.status \}/.test(code));
+  /findOneAndUpdate\(\s*\n?\s*\{ _id: current\._id, status: current\.status, \.\.\.liveTicketFilter\(\)/.test(code));
 t('a lost race is a 409, not a skipped stage', /just moved by someone else/.test(ctl));
 t('readyAt is stamped on the first transition to ready',
   /next === TICKET_STATUS\.READY && !current\.readyAt/.test(code));

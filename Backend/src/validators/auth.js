@@ -24,7 +24,7 @@ import { PIN_LENGTH } from '../models/User.js';
 export const googleLoginSchema = z
   .object({
     credential: z
-      .string({ required_error: 'Google credential is required' })
+      .string({ error: 'Google credential is required' })
       .min(1, 'Google credential is required')
       .max(4096, 'Google credential is too long'),
   })
@@ -34,7 +34,7 @@ export const googleLoginSchema = z
 export const staffLoginSchema = z
   .object({
     pin: z
-      .string({ required_error: 'PIN is required' })
+      .string({ error: 'PIN is required' })
       .trim()
       .regex(new RegExp(`^\\d{${PIN_LENGTH}}$`), `PIN must be exactly ${PIN_LENGTH} digits`),
   })
@@ -58,7 +58,7 @@ const PASSWORD_MAX = 72;
 const PASSWORD_MIN = 10;
 
 const emailField = z
-  .string({ required_error: 'Email is required' })
+  .string({ error: 'Email is required' })
   .trim()
   .toLowerCase()
   .min(1, 'Email is required')
@@ -74,13 +74,13 @@ const emailField = z
 export const registerSchema = z
   .object({
     name: z
-      .string({ required_error: 'Name is required' })
+      .string({ error: 'Name is required' })
       .trim()
       .min(2, 'Name must be at least 2 characters')
       .max(80, 'Name cannot exceed 80 characters'),
     email: emailField,
     password: z
-      .string({ required_error: 'Password is required' })
+      .string({ error: 'Password is required' })
       .min(PASSWORD_MIN, `Password must be at least ${PASSWORD_MIN} characters`)
       .max(PASSWORD_MAX, `Password cannot exceed ${PASSWORD_MAX} characters`),
   })
@@ -99,7 +99,7 @@ export const passwordLoginSchema = z
   .object({
     email: emailField,
     password: z
-      .string({ required_error: 'Password is required' })
+      .string({ error: 'Password is required' })
       .min(1, 'Password is required')
       .max(PASSWORD_MAX, 'Password cannot exceed 72 characters'),
   })

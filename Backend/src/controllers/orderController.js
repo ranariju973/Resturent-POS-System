@@ -19,6 +19,7 @@
  * override PIN, and `approvedBy` records who.
  */
 import mongoose from 'mongoose';
+import { createHash } from 'node:crypto';
 import {
   Order,
   formatInvoiceNo,
@@ -35,7 +36,6 @@ import { nextSequenceWithDay } from '../models/Counter.js';
 import {
   AUDIT_ACTION,
   ORDER_STATUS,
-  ORDER_TYPE,
   TABLE_STATUS,
   TICKET_STATUS,
   DISCOUNT_TYPE,
@@ -56,6 +56,8 @@ import { toMajor, percentOf } from '../utils/money.js';
 import { buildInvoiceUrl } from '../utils/invoiceLink.js';
 import { publicTable } from '../utils/publicTable.js';
 import { logger } from '../utils/logger.js';
+import { dayStart, todayIso } from '../utils/date.js';
+import { orderTableIds, detachOrderTables, tableSource } from '../utils/orderTables.js';
 
 // ---------------------------------------------------------------------------
 // Serialisation
@@ -69,6 +71,9 @@ const publicOrder = (order) => ({
   type: order.type,
   status: order.status,
   table: order.table ? String(order.table) : null,
+  tableIds: orderTableIds(order),
+  tableNames: order.tableNames ?? [],
+  version: order.__v ?? 0,
   customer: order.customer ? String(order.customer) : null,
 
   items: order.items.map((line) => ({
@@ -247,11 +252,29 @@ async function resolveInlineCustomer(inline, req, session) {
   return created._id;
 }
 
-/** Human label for the kitchen board. */
-const ticketSource = (type, table) => {
-  if (type === ORDER_TYPE.DINE_IN && table) return `Table ${table.name}`;
-  return type === ORDER_TYPE.TAKEAWAY ? 'Takeaway' : 'Delivery';
-};
+/** A retry must name the same operation and the same cashier. Never hash a PIN. */
+function creationFingerprint(body) {
+  const { clientRequestId: _id, discount, tableId, tableIds, ...rest } = body;
+  const { adminOverridePin: _pin, ...safeDiscount } = discount ?? {};
+  return createHash('sha256').update(JSON.stringify({ ...rest,
+    tableIds: (tableIds ?? (tableId ? [tableId] : [])).map((id) => id.toLowerCase()),
+    discount: safeDiscount,
+  })).digest('hex');
+}
+
+async function findCreationReplay(req, fingerprint, session = null) {
+  if (!req.body.clientRequestId) return null;
+  const order = await Order.findOne({ clientRequestId: req.body.clientRequestId })
+    .select('+creationFingerprint').session(session);
+  if (!order) return null;
+  if (String(order.createdBy) !== req.user.id || order.creationFingerprint !== fingerprint) {
+    throw ApiError.conflict('This request identifier already belongs to a different order submission');
+  }
+  const tables = await Table.find({ currentOrder: order._id }).session(session);
+  for (const table of tables) table.currentOrder = order;
+  const ticket = await Ticket.findOne({ order: order._id }).select('_id').session(session);
+  return { order, tables, ticket, replayed: true };
+}
 
 // ---------------------------------------------------------------------------
 // POST /api/orders
@@ -265,175 +288,138 @@ const ticketSource = (type, table) => {
  * means food goes out unbilled.
  */
 export const createOrder = asyncHandler(async (req, res) => {
-  const {
-    type,
-    tableId,
-    customerId,
-    customer: inline,
-    items: requestedItems,
-    discount,
-  } = req.body;
-
-  let table = null;
-  if (tableId) {
-    table = await Table.findOne({ _id: tableId, isActive: true });
-    if (!table) throw ApiError.badRequest('Table not found');
-    if (table.currentOrder) {
-      throw ApiError.conflict('That table already has an open bill');
-    }
-    if (table.mergedInto) {
-      throw ApiError.conflict('That table is merged into another — bill the other table');
-    }
-  }
-
-  if (customerId) {
-    const exists = await Customer.exists({ _id: customerId, isActive: true });
-    if (!exists) throw ApiError.badRequest('Customer not found');
-  }
-
-  const result = await withTransaction(async (session) => {
-    let seated = null;
-    let approver = null;
-    const lines = await priceLines(requestedItems, session);
-    // The day comes back with the sequence so the invoice number and the
-    // counter that produced it cannot disagree across a midnight boundary.
-    const { seq: orderNo, day } = await nextSequenceWithDay('order', { session });
-
-    // Resolve the customer inside the transaction, so a record is never left
-    // behind by an order that then failed to save.
-    const resolvedCustomerId = customerId ?? (await resolveInlineCustomer(inline, req, session));
-
-    const order = new Order({
-      orderNo,
-      // Assigned here rather than at payment so the number is stable from the
-      // moment the bill exists — a reprint or a support call can quote it. The
-      // shareable LINK is a separate thing, minted at payment.
-      invoiceNo: formatInvoiceNo(day, orderNo),
-      type,
-      table: table?._id ?? null,
-      customer: resolvedCustomerId ?? null,
-      items: lines,
-      taxRate: DEFAULT_TAX_RATE,
-      status: ORDER_STATUS.OPEN,
-      createdBy: req.user.id,
-    });
-    order.recalculate();
-
-    /*
-     * An opening discount, applied before the first save.
-     *
-     * The till used to POST the order and then immediately PATCH a discount
-     * onto it, which meant the order briefly existed at a total nobody
-     * intended — and if the second call failed, it stayed there. Doing it here
-     * puts the discount inside the same transaction as the order it belongs
-     * to.
-     *
-     * The ceiling check is the SAME helper the PATCH endpoint calls, so a
-     * cashier cannot get a discount past the limit by choosing the other door.
-     * It has to run after the first recalculate(), which is what establishes
-     * the subtotal the ceiling is measured against.
-     */
-    if (discount && discount.type !== null) {
-      approver = await authorizeDiscount(order, discount, req);
-      order.discountType = discount.type;
-      order.discountValue =
-        discount.type === DISCOUNT_TYPE.PERCENT ? discount.percent : discount.valueMinor;
-      if (approver) order.approvedBy = approver._id;
-      order.recalculate();
-    }
-
-    await order.save({ session });
-
-    const ticket = new Ticket({
-      order: order._id,
-      no: orderNo,
-      source: ticketSource(type, table),
-      type,
-      status: TICKET_STATUS.PENDING,
-      placedAt: new Date(),
-    });
-    await ticket.save({ session });
-
-    if (table) {
-      // Atomic claim: the filter requires the table to still be free of a bill,
-      // so two terminals opening a tab on the same table cannot both win.
-      const claimed = await Table.findOneAndUpdate(
-        { _id: table._id, isActive: true, currentOrder: null },
-        {
-          $set: {
-            currentOrder: order._id,
-            status: TABLE_STATUS.OCCUPIED,
+  const { type, tableId, tableIds, customerId, customer: inline,
+    items: requestedItems, discount, clientRequestId } = req.body;
+  const ids = (tableIds ?? (tableId ? [tableId] : [])).map((id) => id.toLowerCase());
+  const fingerprint = creationFingerprint(req.body);
+  let result = await findCreationReplay(req, fingerprint);
+  if (!result) {
+    try {
+      result = await withTransaction(async (session) => {
+        const replay = await findCreationReplay(req, fingerprint, session);
+        if (replay) return replay;
+        const tables = ids.length ? await Table.find({
+          _id: mongoose.trusted({ $in: ids }), isActive: true,
+        }).session(session) : [];
+        if (tables.length !== ids.length) throw ApiError.badRequest('Table not found');
+        if (tables.some((table) => table.currentOrder || (table.mergedInto && !ids.includes(String(table.mergedInto))))) {
+          throw ApiError.conflict('A selected table already belongs to an open group');
+        }
+        if (ids.length) {
+          const members = await Table.find({ mergedInto: mongoose.trusted({ $in: ids }), isActive: true })
+            .select('_id').session(session);
+          if (members.some((member) => !ids.includes(String(member._id)))) {
+            throw ApiError.conflict('Select every table in the existing group');
+          }
+        }
+        const byId = new Map(tables.map((table) => [String(table._id), table]));
+        const selected = ids.map((id) => byId.get(id.toLowerCase()));
+        if (customerId && !await Customer.exists({ _id: customerId, isActive: true }).session(session)) {
+          throw ApiError.badRequest('Customer not found');
+        }
+        const lines = await priceLines(requestedItems, session);
+        const { seq: orderNo, day } = await nextSequenceWithDay('order', { session });
+        const resolvedCustomerId = customerId ?? await resolveInlineCustomer(inline, req, session);
+        const order = new Order({
+          orderNo, invoiceNo: formatInvoiceNo(day, orderNo), type,
+          table: selected[0]?._id ?? null, tableIds: selected.map((table) => table._id),
+          tableNames: selected.map((table) => table.name),
+          clientRequestId: clientRequestId ?? null, creationFingerprint: fingerprint,
+          customer: resolvedCustomerId ?? null, items: lines, taxRate: DEFAULT_TAX_RATE,
+          status: ORDER_STATUS.OPEN, createdBy: req.user.id,
+        });
+        order.recalculate();
+        let approver = null;
+        if (discount && discount.type !== null) {
+          approver = await authorizeDiscount(order, discount, req);
+          order.discountType = discount.type;
+          order.discountValue = discount.type === DISCOUNT_TYPE.PERCENT ? discount.percent : discount.valueMinor;
+          if (approver) order.approvedBy = approver._id;
+          order.recalculate();
+        }
+        await order.save({ session });
+        const ticket = new Ticket({ order: order._id, no: orderNo,
+          source: tableSource(type, order.tableNames), type,
+          status: TICKET_STATUS.PENDING, placedAt: order.createdAt });
+        await ticket.save({ session });
+        // Sequential writes inside the session. A failed member claim rolls back the whole group.
+        const seated = [];
+        for (const table of selected) {
+          const claimed = await Table.findOneAndUpdate({
+            _id: table._id, isActive: true, currentOrder: null, mergedInto: table.mergedInto ?? null,
+          }, { $set: {
+            currentOrder: order._id, status: TABLE_STATUS.OCCUPIED,
             occupiedAt: table.occupiedAt ?? new Date(),
+            mergedInto: String(table._id) === String(order.table) ? null : order.table,
+          } }, { new: true, session });
+          if (!claimed) throw ApiError.conflict('A selected table was just billed by another terminal');
+          claimed.currentOrder = order;
+          seated.push(claimed);
+        }
+        await AuditLog.record(
+          {
+            action: AUDIT_ACTION.ORDER_CREATE,
+            resource: 'Order',
+            resourceId: order._id,
+            meta: {
+              orderNo: order.orderNo,
+              type,
+              lines: order.items.length,
+              totalMinor: order.totalMinor,
+            },
           },
-        },
-        { new: true, session },
-      );
+          req,
+          { session },
+        );
 
-      if (!claimed) {
-        // Inside a transaction this rolls back the order and ticket too.
-        throw ApiError.conflict('That table was just billed by someone else');
-      }
+        /*
+         * A discount that arrived with the order still gets its own audit entry.
+         *
+         * Folding the discount into this endpoint must not make it any quieter than
+         * the PATCH route it replaces — a manager override in particular is exactly
+         * the event the audit trail exists to record, and it would be invisible if
+         * the only entry were ORDER_CREATE.
+         */
+        if (order.discountType) {
+          await AuditLog.record(
+            {
+              action: approver
+                ? AUDIT_ACTION.ORDER_DISCOUNT_OVERRIDE
+                : AUDIT_ACTION.ORDER_DISCOUNT_APPLIED,
+              resource: 'Order',
+              resourceId: order._id,
+              meta: {
+                orderNo: order.orderNo,
+                type: order.discountType,
+                percent:
+                  order.discountType === DISCOUNT_TYPE.PERCENT
+                    ? order.discountValue
+                    : undefined,
+                discountMinor: order.discountMinor,
+                atOrderCreation: true,
+                approvedBy: approver ? String(approver._id) : undefined,
+                approverName: approver?.name,
+              },
+            },
+            req,
+            { session },
+          );
+        }
 
-      // The floor plan shows each occupied table's running total, which
-      // publicTable only fills in when currentOrder is populated. The order is
-      // already in hand, so attaching it here produces the populated shape
-      // without the extra round trip a .populate() would cost.
-      claimed.currentOrder = order;
-      seated = claimed;
+        return { order, ticket, tables: seated, approver, replayed: false };
+      }, { required: ids.length > 1 });
+    } catch (error) {
+      // Concurrent identical submissions can meet at the unique request-id index.
+      if (error.code !== 11000 || !clientRequestId) throw error;
+      result = await findCreationReplay(req, fingerprint);
+      if (!result) throw error;
     }
-
-    // Returned from the callback rather than captured in an outer variable:
-    // withTransaction retries the whole callback on a transient error, and a
-    // closure variable would keep whatever the abandoned attempt wrote.
-    return { order, ticket, table: seated, approver };
-  });
-
-  await AuditLog.record(
-    {
-      action: AUDIT_ACTION.ORDER_CREATE,
-      resource: 'Order',
-      resourceId: result.order._id,
-      meta: {
-        orderNo: result.order.orderNo,
-        type,
-        lines: result.order.items.length,
-        totalMinor: result.order.totalMinor,
-      },
-    },
-    req,
-  );
-
-  /*
-   * A discount that arrived with the order still gets its own audit entry.
-   *
-   * Folding the discount into this endpoint must not make it any quieter than
-   * the PATCH route it replaces — a manager override in particular is exactly
-   * the event the audit trail exists to record, and it would be invisible if
-   * the only entry were ORDER_CREATE.
-   */
-  if (result.order.discountType) {
-    await AuditLog.record(
-      {
-        action: result.approver
-          ? AUDIT_ACTION.ORDER_DISCOUNT_OVERRIDE
-          : AUDIT_ACTION.ORDER_DISCOUNT_APPLIED,
-        resource: 'Order',
-        resourceId: result.order._id,
-        meta: {
-          orderNo: result.order.orderNo,
-          type: result.order.discountType,
-          percent:
-            result.order.discountType === DISCOUNT_TYPE.PERCENT
-              ? result.order.discountValue
-              : undefined,
-          discountMinor: result.order.discountMinor,
-          atOrderCreation: true,
-          approvedBy: result.approver ? String(result.approver._id) : undefined,
-          approverName: result.approver?.name,
-        },
-      },
-      req,
-    );
+  }
+  if (result.replayed) {
+    return sendSuccess(res, { order: publicOrder(result.order),
+      ticketId: result.ticket ? String(result.ticket._id) : null,
+      table: result.tables[0] ? publicTable(result.tables[0]) : null,
+      tables: result.tables.map(publicTable), replayed: true });
   }
 
   // Push the new ticket to connected boards. After the transaction committed,
@@ -454,7 +440,9 @@ export const createOrder = asyncHandler(async (req, res) => {
        * existed only to learn that the table this response already claimed is
        * now occupied. Null for takeaway and delivery, which seat nobody.
        */
-      table: result.table ? publicTable(result.table) : null,
+      table: result.tables[0] ? publicTable(result.tables[0]) : null,
+      tables: result.tables.map(publicTable),
+      replayed: false,
     },
     { status: 201 },
   );
@@ -476,7 +464,7 @@ export const listOrders = asyncHandler(async (req, res) => {
   const filter = {};
   if (status) filter.status = status;
   if (type) filter.type = type;
-  if (tableId) filter.table = tableId;
+  if (tableId) filter.$or = [{ table: tableId }, { tableIds: tableId }];
   if (customerId) filter.customer = customerId;
 
   const seesEverything = can(req, PERMISSIONS.REPORTS_VIEW);
@@ -497,8 +485,7 @@ export const listOrders = asyncHandler(async (req, res) => {
     }
   } else {
     // Non-admins: today only, regardless of what was asked for.
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const startOfDay = dayStart(todayIso());
     filter.createdAt = mongoose.trusted({ $gte: startOfDay });
   }
 
@@ -531,6 +518,9 @@ export const getOrder = asyncHandler(async (req, res) => {
 export const updateOrderItems = asyncHandler(async (req, res) => {
   const order = await Order.findById(req.params.id);
   if (!order) throw ApiError.notFound('Order not found');
+  if (req.body.version !== undefined && req.body.version !== order.__v) {
+    throw ApiError.conflict('This bill changed. Reload it before editing.');
+  }
   if (!order.canBeModified()) {
     throw ApiError.conflict(`A ${order.status} order cannot be modified`);
   }
@@ -647,108 +637,48 @@ export const applyDiscount = asyncHandler(async (req, res) => {
 // POST /api/orders/:id/pay
 // ---------------------------------------------------------------------------
 export const payOrder = asyncHandler(async (req, res) => {
-  const { paymentMethod, customerId } = req.body;
-
-  const order = await Order.findById(req.params.id);
-  if (!order) throw ApiError.notFound('Order not found');
-  if (order.status === ORDER_STATUS.PAID) throw ApiError.conflict('That bill is already paid');
-  if (order.status === ORDER_STATUS.VOIDED) throw ApiError.conflict('That bill was voided');
-
-  if (customerId) {
-    const exists = await Customer.exists({ _id: customerId, isActive: true });
-    if (!exists) throw ApiError.badRequest('Customer not found');
-    order.customer = customerId;
-  }
-
-  /**
-   * Minted here rather than at creation, and the reason is not stylistic.
-   *
-   * Only the HASH is stored, so a later request can never reconstruct the raw
-   * token — this is the one moment it exists in memory, and the one response
-   * that can carry it. Doing it at payment also means a bill voided before it
-   * was ever settled has no shareable link at all, which is exactly right.
-   */
-  const invoiceToken = mintInvoiceToken();
-
-  // Read before the response is built. `order.customer` is an id, and the
-  // client may only ever have held a masked form of the number.
-  const customerPhone = order.customer
-    ? (await Customer.findById(order.customer).select('+phoneNormalized phone'))?.phone ?? null
-    : null;
-
-  await withTransaction(async (session) => {
+  const { paymentMethod, customerId, version } = req.body;
+  const result = await withTransaction(async (session) => {
+    // Re-read on each driver retry; never reuse a document mutated by an aborted transaction.
+    const order = await Order.findById(req.params.id).session(session);
+    if (!order) throw ApiError.notFound('Order not found');
+    if (order.status === ORDER_STATUS.VOIDED) throw ApiError.conflict('That bill was voided');
+    if (order.status === ORDER_STATUS.PAID) {
+      if (order.paymentMethod !== paymentMethod || (customerId && String(order.customer) !== customerId)) {
+        throw ApiError.conflict('That bill was already paid with different details');
+      }
+      return { order, tables: [], replayed: true };
+    }
+    if (version !== undefined && version !== order.__v) {
+      throw ApiError.conflict('This bill changed. Review the updated total before payment.');
+    }
+    if (customerId) {
+      if (!await Customer.exists({ _id: customerId, isActive: true }).session(session)) {
+        throw ApiError.badRequest('Customer not found');
+      }
+      order.customer = customerId;
+    }
+    const invoiceToken = mintInvoiceToken();
     order.status = ORDER_STATUS.PAID;
     order.paymentMethod = paymentMethod;
     order.paidAt = new Date();
     order.invoiceTokenHash = hashInvoiceToken(invoiceToken);
     await order.save({ session });
-
-    /**
-     * Release the BILL, but not the table.
-     *
-     * `currentOrder` must be cleared or the unique "one open order per table"
-     * index blocks the next party forever. The status is a different question:
-     * paying does not make a party stand up. They are still sitting there with
-     * their coffee, and a floor plan that turns the table green the instant the
-     * card is tapped tells the host a table is free that is not.
-     *
-     * So the table stays OCCUPIED until somebody explicitly clears it — the
-     * release endpoint, which is what the "clear" action on the floor calls.
-     * `occupiedAt` is kept for the same reason: the elapsed timer should keep
-     * running while the table is still held.
-     */
-    if (order.table) {
-      await Table.updateOne(
-        { _id: order.table },
-        { $set: { currentOrder: null, mergedInto: null } },
-        { session },
-      );
-      // A merged table is unmerged with the bill, but likewise stays seated.
-      await Table.updateMany(
-        { mergedInto: order.table },
-        { $set: { mergedInto: null } },
-        { session },
-      );
-    }
+    const tables = await detachOrderTables(order, session);
+    if (order.customer) await Customer.recordVisit(order.customer, order.paidAt).session(session);
+    await AuditLog.record({ action: AUDIT_ACTION.ORDER_PAY, resource: 'Order', resourceId: order._id,
+      meta: { orderNo: order.orderNo, paymentMethod, totalMinor: order.totalMinor } }, req, { session });
+    return { order, tables, invoiceToken, replayed: false };
   });
-
-  // Denormalised counters — outside the transaction because a failure here
-  // must not undo a completed payment.
-  if (order.customer) {
-    await Customer.recordVisit(order.customer).catch((err) =>
-      logger.warn('Failed to update customer visit counters', { message: err.message }),
-    );
-  }
-
-  await AuditLog.record(
-    {
-      action: AUDIT_ACTION.ORDER_PAY,
-      resource: 'Order',
-      resourceId: order._id,
-      meta: { orderNo: order.orderNo, paymentMethod, totalMinor: order.totalMinor },
-    },
-    req,
-  );
-
+  const { order, tables, invoiceToken, replayed } = result;
+  // A retry returns the paid bill without minting another public credential.
+  const customerPhone = order.customer && !replayed
+    ? await Customer.findById(order.customer).select('phone').lean()
+      .then((customer) => customer?.phone ?? null).catch(() => null) : null;
   return sendSuccess(res, {
-    order: publicOrder(order),
-    // The share link, returned once. The client keeps it for the WhatsApp
-    // hand-off; the server cannot rebuild it after this response.
-    invoice: {
-      invoiceNo: order.invoiceNo,
-      url: buildInvoiceUrl(order.invoiceNo, invoiceToken),
-      /**
-       * The customer's real number, so the till can hand the receipt over.
-       *
-       * The suggestion endpoint masks phone numbers on purpose — it is a
-       * prefix search and an unmasked one would let anyone walk the customer
-       * list. That protection is about SEARCH RESULTS. Here the bill is
-       * already settled, the caller holds `pos:create_order`, and they need
-       * the number to send the receipt they just took payment for. Withholding
-       * it would mean a returning customer can never be sent their own bill.
-       */
-      customerPhone: customerPhone ?? null,
-    },
+    order: publicOrder(order), tables, replayed,
+    invoice: replayed ? null : { invoiceNo: order.invoiceNo,
+      url: buildInvoiceUrl(order.invoiceNo, invoiceToken), customerPhone },
   });
 });
 
@@ -768,7 +698,7 @@ export const payOrder = asyncHandler(async (req, res) => {
 export const voidOrder = asyncHandler(async (req, res) => {
   const { reason, adminOverridePin } = req.body;
 
-  const order = await Order.findById(req.params.id);
+  let order = await Order.findById(req.params.id);
   if (!order) throw ApiError.notFound('Order not found');
   if (order.status === ORDER_STATUS.VOIDED) throw ApiError.conflict('That bill is already voided');
 
@@ -787,7 +717,14 @@ export const voidOrder = asyncHandler(async (req, res) => {
     if (!approver) throw ApiError.forbidden('Voiding a paid bill requires manager approval');
   }
 
-  await withTransaction(async (session) => {
+  if (req.body.version !== undefined && req.body.version !== order.__v) {
+    throw ApiError.conflict('This bill changed. Reload it before voiding.');
+  }
+  const expectedVersion = order.__v;
+  const result = await withTransaction(async (session) => {
+    const current = await Order.findById(req.params.id).session(session);
+    if (!current || current.__v !== expectedVersion) throw ApiError.conflict('This bill changed. Reload it before voiding.');
+    const order = current;
     order.status = ORDER_STATUS.VOIDED;
     order.voidedBy = req.user.id;
     order.voidedAt = new Date();
@@ -803,36 +740,35 @@ export const voidOrder = asyncHandler(async (req, res) => {
       { session },
     );
 
-    if (order.table) {
-      await Table.updateOne(
-        { _id: order.table, currentOrder: order._id },
-        { $set: { currentOrder: null, status: TABLE_STATUS.AVAILABLE, occupiedAt: null } },
-        { session },
-      );
-    }
+    const tables = await detachOrderTables(order, session, !order.paidAt);
+    await AuditLog.record(
+      {
+        action: AUDIT_ACTION.ORDER_VOID,
+        resource: 'Order',
+        resourceId: order._id,
+        meta: {
+          orderNo: order.orderNo,
+          reason,
+          wasPaid: Boolean(order.paidAt),
+          totalMinor: order.totalMinor,
+          approvedBy: approver ? String(approver._id) : undefined,
+          approverName: approver?.name,
+        },
+      },
+      req,
+      { session },
+    );
+    return { order, tables };
+
   });
+
+  order = result.order;
 
   // Tell the boards to drop it — the kitchen must stop cooking.
   emitEvent(EVENTS.ORDER_VOIDED, { orderId: String(order._id), orderNo: order.orderNo });
 
-  await AuditLog.record(
-    {
-      action: AUDIT_ACTION.ORDER_VOID,
-      resource: 'Order',
-      resourceId: order._id,
-      meta: {
-        orderNo: order.orderNo,
-        reason,
-        wasPaid: Boolean(order.paidAt),
-        totalMinor: order.totalMinor,
-        approvedBy: approver ? String(approver._id) : undefined,
-        approverName: approver?.name,
-      },
-    },
-    req,
-  );
 
-  return sendSuccess(res, { order: publicOrder(order) });
+  return sendSuccess(res, { order: publicOrder(order), tables: result.tables });
 });
 
 // ---------------------------------------------------------------------------
@@ -902,30 +838,24 @@ export const deleteOrder = asyncHandler(async (req, res) => {
 
     // Free the table only if it still points at THIS order. An unconditional
     // clear would release a table that has since been seated by someone else.
-    if (order.table) {
-      await Table.updateOne(
-        { _id: order.table, currentOrder: order._id },
-        { $set: { currentOrder: null, status: TABLE_STATUS.AVAILABLE, occupiedAt: null } },
-        { session },
-      );
-    }
+    await detachOrderTables(order, session, order.status === ORDER_STATUS.OPEN);
+    const deleted = await Order.deleteOne({ _id: order._id, __v: order.__v }, { session });
+    if (!deleted.deletedCount) throw ApiError.conflict('This bill changed. Reload it before deleting.');
 
-    await Order.deleteOne({ _id: order._id }, { session });
+    await AuditLog.record(
+      {
+        action: AUDIT_ACTION.ORDER_DELETE,
+        resource: 'Order',
+        resourceId: order._id,
+        meta: { reason, ...snapshot },
+      },
+      req,
+      { session },
+    );
+
   });
 
   emitEvent(EVENTS.ORDER_VOIDED, { orderId: String(order._id), orderNo: order.orderNo });
-
-  // Written after the commit: an audit line for a delete that rolled back
-  // would be a false record of a sale being destroyed.
-  await AuditLog.record(
-    {
-      action: AUDIT_ACTION.ORDER_DELETE,
-      resource: 'Order',
-      resourceId: order._id,
-      meta: { reason, ...snapshot },
-    },
-    req,
-  );
 
   logger.warn('Order permanently deleted', {
     orderNo: snapshot.orderNo,

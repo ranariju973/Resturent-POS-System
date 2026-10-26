@@ -1,3 +1,4 @@
+import { safeRequestPath } from '../utils/logRedaction.js';
 /**
  * 404 + centralised error handling.
  *
@@ -20,6 +21,12 @@ export function notFoundHandler(req, res, next) {
 /** Translate known error shapes into a client-safe ApiError. */
 function normalize(err) {
   if (err instanceof ApiError) return err;
+
+  if (err instanceof mongoose.Error.VersionError || err?.code === 112) {
+    return new ApiError(409, 'This bill changed on another terminal. Reload it before trying again.', {
+      code: 'ORDER_CHANGED', cause: err,
+    });
+  }
 
   if (err instanceof ZodError) {
     return new ApiError(400, 'Validation failed', {
@@ -135,12 +142,12 @@ export function errorHandler(err, req, res, next) {
   const logPayload = {
     requestId: req.id,
     method: req.method,
-    path: req.originalUrl,
+    path: safeRequestPath(req),
     status: apiError.status,
     userId: req.user?.id,
     ip: req.ip,
-    message: original?.message,
-    stack: original?.stack,
+    message: isServerFault ? original?.message : apiError.message,
+    stack: isServerFault ? original?.stack : undefined,
   };
 
   if (isServerFault) logger.error('Unhandled request error', logPayload);

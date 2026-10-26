@@ -22,12 +22,14 @@
  */
 import { EventEmitter } from 'node:events';
 import { logger } from './logger.js';
+import { requireTenantId } from './tenantContext.js';
 
 export const EVENTS = Object.freeze({
   TICKET_CREATED: 'ticket:created',
   TICKET_ADVANCED: 'ticket:advanced',
   TICKET_RECALLED: 'ticket:recalled',
   ORDER_VOIDED: 'order:voided',
+  TABLE_CHANGED: 'table:changed',
 });
 
 class Bus extends EventEmitter {}
@@ -51,7 +53,8 @@ bus.setMaxListeners(100);
  */
 export function emitEvent(event, payload) {
   try {
-    bus.emit(event, { event, at: new Date().toISOString(), ...payload });
+    bus.emit(event, { event, at: new Date().toISOString(), ...payload,
+      tenantId: String(requireTenantId('emit kitchen event')) });
   } catch (err) {
     logger.error('Failed to publish realtime event', { event, message: err.message });
   }
@@ -62,12 +65,18 @@ export function emitEvent(event, payload) {
  * @param {(payload: object) => void} handler
  * @returns {() => void} unsubscribe
  */
-export function subscribeAll(handler) {
+export function subscribeAll(handler, tenantId = requireTenantId('subscribe to kitchen events')) {
+  const scopedHandler = (payload) => {
+    if (String(payload.tenantId) !== String(tenantId)) return;
+    const { tenantId: _tenantId, ...publicPayload } = payload;
+    try { handler(publicPayload); }
+    catch (error) { logger.warn('Kitchen subscriber failed', { message: error.message }); }
+  };
   const names = Object.values(EVENTS);
-  for (const name of names) bus.on(name, handler);
+  for (const name of names) bus.on(name, scopedHandler);
 
   return () => {
-    for (const name of names) bus.off(name, handler);
+    for (const name of names) bus.off(name, scopedHandler);
   };
 }
 

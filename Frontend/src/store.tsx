@@ -15,6 +15,7 @@ import type { Order } from './lib/ordersApi';
 import * as tablesApi from './lib/tablesApi';
 import * as kitchenApi from './lib/kitchenApi';
 import * as dashboardApi from './lib/dashboardApi';
+import { indiaToday, operationalWindow } from './lib/serviceDay';
 import * as customersApi from './lib/customersApi';
 import * as reportsApi from './lib/reportsApi';
 import * as employeesApi from './lib/employeesApi';
@@ -127,7 +128,7 @@ export const SHOW_ALL = '*all*';
  * dayStart/dayEnd), so the client has to speak the same calendar. `en-CA`
  * formats as YYYY-MM-DD, which is the shape every endpoint expects.
  */
-export const todayLocal = (): string => new Date().toLocaleDateString('en-CA');
+export const todayLocal = (): string => indiaToday();
 
 /** The current month, same reasoning as todayLocal. */
 export const thisMonthLocal = (): string => todayLocal().slice(0, 7);
@@ -447,6 +448,9 @@ interface State {
   orderType: OrderType;
   /** Table id, not name — the create-order call needs the id. Dine-in only. */
   orderTable: string | null;
+  orderTables: string[];
+  draftTableIds: string[];
+  creationUncertain: boolean;
   /**
    * The bill once it has been opened on the server. Until this is set the cart
    * is a local draft and nothing has been committed; once it is set the order
@@ -512,9 +516,11 @@ interface State {
   kdsFocus: string | null;
   kdsLoading: boolean;
   kdsError: string;
+  kdsResetAt: string | null;
 
   dash: DashboardData | null;
   dashLoading: boolean;
+  recentLoading: boolean;
   dashError: string;
   /** The order open in the detail drawer, fetched in full by id. */
   viewOrder: Order | null;
@@ -677,8 +683,11 @@ const createInitialState = (): State => {
     printBusy: false,
     orderType: 'dine-in',
     orderTable: null,
+    orderTables: [],
+    draftTableIds: [],
     activeOrder: null,
     checkoutPending: false,
+    creationUncertain: false,
 
     // Server-owned collections all start empty and are filled by the loaders
     // below. `null` error means "nothing has gone wrong", not "not loaded" —
@@ -726,9 +735,11 @@ const createInitialState = (): State => {
     kdsFocus: null,
     kdsLoading: false,
     kdsError: '',
+    kdsResetAt: null,
 
     dash: null,
     dashLoading: false,
+    recentLoading: false,
     dashError: '',
     viewOrder: null,
     viewOrderLoading: false,
@@ -841,6 +852,10 @@ function usePosState() {
   const ref = useRef(state);
   ref.current = state;
 
+  const creationAttempt = useRef<{ userId: string; input: Parameters<typeof ordersApi.createOrder>[0] } | null>(null);
+  const boardRequest = useRef<Promise<void> | null>(null);
+  const boardRefreshQueued = useRef(false);
+  const dashboardRequest = useRef<Promise<void> | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const shakeOn = useRef<number | undefined>(undefined);
   const shakeOff = useRef<number | undefined>(undefined);
@@ -1681,16 +1696,34 @@ function usePosState() {
         patch({
           orderType,
           orderTable: orderType === 'dine-in' ? ref.current.orderTable : null,
+          orderTables: orderType === 'dine-in' ? ref.current.orderTables : [],
+          draftTableIds: orderType === 'dine-in' ? ref.current.orderTables : [],
           // Choosing dine-in without a table is an unfinished choice — the
           // server refuses the order — so the chooser opens straight away
           // rather than waiting to be found.
           tablePickerOpen: orderType === 'dine-in' && !ref.current.orderTable,
         }),
 
-      openTablePicker: () => patch({ tablePickerOpen: true }),
+      openTablePicker: () => {
+        if (ref.current.activeOrder || ref.current.checkoutPending) return;
+        patch({ tablePickerOpen: true, draftTableIds: [...ref.current.orderTables] });
+        void actions.loadTables();
+      },
       closeTablePicker: () => patch({ tablePickerOpen: false }),
 
-      chooseTable: (id: string | null) => patch({ orderTable: id, tablePickerOpen: false }),
+      toggleDraftTable: (id: string) => {
+        const ids = ref.current.draftTableIds;
+        if (!ids.includes(id) && ids.length >= 50) return warn('Choose up to 50 tables.');
+        patch({ draftTableIds: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id] });
+      },
+      confirmTables: () => {
+        const ids = ref.current.draftTableIds;
+        if (!ids.length) return;
+        if (ids.some((id) => !ref.current.tables.some((table) => table.id === id && !table.orderId))) {
+          return warn('A selected table changed. Refresh the selection.');
+        }
+        patch({ orderTable: ids[0], orderTables: [...ids], tablePickerOpen: false });
+      },
 
       setCustomerPhone: (customerPhone: string) => {
         // Editing the number invalidates whatever name it resolved to, and any
@@ -1745,10 +1778,9 @@ function usePosState() {
       /**
        * Open the bill.
        *
-       * Creates the order and its kitchen ticket in one server-side
-       * transaction, then applies the discount as a second call because the
-       * discount endpoint is the one with the cashier ceiling and the manager
-       * override on it. The client sends item ids and quantities only — every
+       * Creates the order, discount, kitchen ticket and all table claims in
+       * one server-side transaction. The server checks discount authority.
+       * The client sends item ids and quantities only — every
        * total on the returned order is the server's own arithmetic, which is
        * why `activeOrder` replaces the locally computed figures the moment it
        * arrives.
@@ -1760,9 +1792,11 @@ function usePosState() {
 
         patch({ checkoutPending: true });
         try {
-          const { order, table } = await ordersApi.createOrder({
+          if (creationAttempt.current?.userId !== s.user?.id) creationAttempt.current = null;
+          const input: Parameters<typeof ordersApi.createOrder>[0] = creationAttempt.current?.input ?? {
+            clientRequestId: crypto.randomUUID(),
             type: s.orderType,
-            tableId: s.orderType === 'dine-in' ? (s.orderTable ?? undefined) : undefined,
+            tableIds: s.orderType === 'dine-in' ? s.orderTables : undefined,
             // Picked from the list: attach by id. The suggest endpoint never
             // returns a full number, so there are no digits to send back.
             customerId: s.customerId ?? undefined,
@@ -1790,10 +1824,16 @@ function usePosState() {
                     value: s.discountValue.trim(),
                   }
                 : undefined,
-          });
-
+          };
+          creationAttempt.current = { userId: s.user!.id, input };
+          const { order, tables } = await ordersApi.createOrder(input);
+          creationAttempt.current = null;
           patch({
-            activeOrder: order,
+            activeOrder: order.status === 'open' ? order : null,
+            creationUncertain: false,
+            orderTable: order.status === 'open' ? order.table : null,
+            orderTables: order.status === 'open' ? order.tableIds ?? (order.table ? [order.table] : []) : [],
+            cart: order.status === 'open' ? order.items.map((line) => ({ id: line.menuItem, qty: line.qty, note: line.note, noteOpen: false })) : [],
             checkoutPending: false,
             lastPrintable: null,
             /*
@@ -1806,13 +1846,19 @@ function usePosState() {
              * `tickets`, and it has its own SSE stream that the server already
              * notified via announceNewTicket.
              */
-            ...(table
-              ? { tables: ref.current.tables.map((t) => (t.id === table.id ? table : t)) }
-              : {}),
+            tables: ref.current.tables.map((table) => tables.find((updated) => updated.id === table.id) ?? table),
           });
-          flash(`Bill #${order.orderNo} opened`);
+          if (order.status !== 'open') {
+            patch({ lastPrintable: { order, tableName: order.tableNames?.join(' + ') || '', customerName: s.customer },
+              customer: '', customerId: null, customerPhone: '', customerPhoneMasked: '', customerKnown: false,
+              discountValue: '0', discountMode: 'flat', draftTableIds: [], lastSettled: null });
+          }
+          flash(`Bill #${order.orderNo} ${order.status === 'open' ? 'opened' : `already ${order.status}`}`);
         } catch (err) {
-          patch({ checkoutPending: false });
+          const uncertain = !(err instanceof ApiError) || err.status === 0 || err.status >= 500 || err.status === 408;
+          if (!uncertain) creationAttempt.current = null;
+          patch({ checkoutPending: false, creationUncertain: uncertain });
+          if (err instanceof ApiError && err.status === 409) void actions.loadTables();
           // A discount above the ceiling comes back 403 with the server's own
           // wording, which says more than a generic failure would.
           warn(describe(err, 'Could not open the bill.'));
@@ -1970,7 +2016,7 @@ function usePosState() {
           : s.activeOrder
             ? {
                 order: s.activeOrder,
-                tableName: s.tables.find((t) => t.id === s.orderTable)?.name ?? '',
+                tableName: s.activeOrder?.tableNames?.join(' + ') || s.tables.filter((t) => s.orderTables.includes(t.id)).map((t) => t.name).join(' + '),
               }
             : null;
         if (!source || s.printBusy) return;
@@ -2012,7 +2058,7 @@ function usePosState() {
           : s.activeOrder
             ? {
                 order: s.activeOrder,
-                tableName: s.tables.find((t) => t.id === s.orderTable)?.name ?? '',
+                tableName: s.activeOrder?.tableNames?.join(' + ') || s.tables.filter((t) => s.orderTables.includes(t.id)).map((t) => t.name).join(' + '),
                 customerName: s.customer.trim(),
               }
             : null;
@@ -2137,7 +2183,7 @@ function usePosState() {
          */
         // Resolved before the reset clears `orderTable` — the paid order carries
         // a table id, and a receipt needs the name.
-        const settledTableName = s.tables.find((t) => t.id === s.orderTable)?.name ?? '';
+        const settledTableName = s.activeOrder?.tableNames?.join(' + ') || s.tables.filter((t) => s.orderTables.includes(t.id)).map((t) => t.name).join(' + ');
         const settled = {
           // Placeholder: the authoritative number comes back with the payment
           // response, since a customer attached by id was never typed here.
@@ -2149,10 +2195,11 @@ function usePosState() {
 
         patch({ checkoutPending: true });
         try {
-          const { order: paid, invoice } = await ordersApi.payOrder(s.activeOrder.id, {
-            paymentMethod,
+          const { order: paid, invoice, tables, replayed } = await ordersApi.payOrder(s.activeOrder.id, {
+            paymentMethod, version: s.activeOrder.version,
           });
           patch({
+            tables: ref.current.tables.map((table) => tables.find((updated) => updated.id === table.id) ?? table),
             // The paid order itself, so a bill can still be printed once the
             // cart is gone. `lastSettled` holds a count, not the items.
             lastPrintable: {
@@ -2185,12 +2232,30 @@ function usePosState() {
             customerSuggestions: [],
             suggestOpen: false,
             orderTable: null,
+            orderTables: [],
+            draftTableIds: [],
           });
           flash(`Bill #${paid.orderNo} settled — ${paymentMethod}`);
-          void actions.loadTables();
+          if (replayed) void actions.loadTables();
         } catch (err) {
+          // Reconcile a lost response before enabling another payment attempt.
+          try {
+            const current = await ordersApi.getOrder(s.activeOrder.id);
+            if (current.status === 'paid') {
+              patch({ activeOrder: null, cart: [], orderTable: null, orderTables: [], draftTableIds: [],
+                customer: '', customerId: null, customerPhone: '', customerPhoneMasked: '', customerKnown: false,
+                customerSuggestions: [], suggestOpen: false, discountValue: '0', discountMode: 'flat',
+                lastPrintable: { order: current, tableName: settledTableName, customerName: settled.customerName },
+                lastSettled: null });
+              flash(`Bill #${current.orderNo} is paid. Receipt printing is available.`);
+              void actions.loadTables();
+              patch({ checkoutPending: false });
+              return;
+            } else patch({ activeOrder: current,
+              cart: current.items.map((line) => ({ id: line.menuItem, qty: line.qty, note: line.note, noteOpen: false })) });
+          } catch { /* Keep the existing order so a retry targets the same bill. */ }
           patch({ checkoutPending: false });
-          warn(describe(err, 'Could not take that payment.'));
+          warn(describe(err, 'Could not confirm payment. Retry this bill.'));
         }
       },
 
@@ -2204,7 +2269,8 @@ function usePosState() {
 
         patch({ checkoutPending: true });
         try {
-          const voided = await ordersApi.voidOrder(s.activeOrder.id, { reason });
+          const { order: voided, tables } = await ordersApi.voidOrder(s.activeOrder.id, { reason, version: s.activeOrder.version });
+          patch({ tables: ref.current.tables.map((table) => tables.find((updated) => updated.id === table.id) ?? table) });
           patch({
             activeOrder: null,
             checkoutPending: false,
@@ -2216,12 +2282,12 @@ function usePosState() {
             customerKnown: false,
             customerId: null,
             orderTable: null,
+            orderTables: [],
+            draftTableIds: [],
             lastSettled: null,
             lastPrintable: null,
           });
           flash(`Bill #${voided.orderNo} voided`);
-          void actions.loadTables();
-          void actions.loadBoard();
         } catch (err) {
           patch({ checkoutPending: false });
           warn(describe(err, 'Could not void that bill.'));
@@ -2238,6 +2304,8 @@ function usePosState() {
           customerPhoneMasked: '',
           customerKnown: false,
           orderTable: null,
+          orderTables: [],
+          draftTableIds: [],
         }),
 
       /** Load the menu. Categories and items together — the grid needs both. */
@@ -2552,10 +2620,26 @@ function usePosState() {
         setDraft({ img: '', file: null });
       },
 
-      startOrderAt: (table: Table) => {
+      startOrderAt: async (table: Table) => {
+        const s = ref.current;
+        if (s.checkoutPending || s.creationUncertain) return;
+        if (s.activeOrder && s.activeOrder.id !== table.orderId) return warn('Settle or void the current bill first.');
+        if (!s.activeOrder && s.cart.length) return warn('Finish or clear the current draft first.');
+        if (table.orderId) {
+          try {
+            const order = await ordersApi.getOrder(table.orderId);
+            if (order.status !== 'open') { void actions.loadTables(); return warn('That bill is no longer open.'); }
+            patch({ activeOrder: order, orderType: 'dine-in', orderTable: order.table,
+              orderTables: order.tableIds ?? [table.id], selTable: null,
+              cart: order.items.map((line) => ({ id: line.menuItem, qty: line.qty, note: line.note, noteOpen: false })) });
+          } catch (error) { return warn(describe(error, 'Could not open the shared bill.')); }
+        } else {
+          const primary = table.merge ?? table.id;
+          const ids = [primary, ...s.tables.filter((member) => member.merge === primary).map((member) => member.id)];
+          patch({ orderType: 'dine-in', orderTable: primary, orderTables: ids,
+            draftTableIds: ids, tablePickerOpen: true, selTable: null });
+        }
         shell({ active: 'billing' });
-        patch({ orderTable: table.id, selTable: null });
-        flash(`New order started on ${table.name}`);
       },
 
       openTable: (table: Table) => {
@@ -2571,9 +2655,7 @@ function usePosState() {
           return void actions.loadTableOrder(table);
         }
         if (table.status === 'available') {
-          shell({ active: 'billing' });
-          patch({ orderTable: table.id, selTable: null });
-          return flash(`New order started on ${table.name}`);
+          return void actions.startOrderAt(table);
         }
         patch({ selTable: table.id, panel: 'summary', tableOrder: null });
       },
@@ -2756,7 +2838,7 @@ function usePosState() {
         // Keyed to the destination, which is the row the host just tapped.
         patch({ tblBusyId: destId });
         try {
-          const { source, target } = await tablesApi.transferTable(src.id, destId);
+          const { target, tables } = await tablesApi.transferTable(src.id, destId);
           // Rebuilt from ref.current, NOT from the `s` captured above: the
           // floor is live (the SSE stream and other terminals both write to
           // it), so mapping over a pre-request snapshot would silently revert
@@ -2764,7 +2846,7 @@ function usePosState() {
           patch({
             tblBusyId: null,
             tables: ref.current.tables.map((t) =>
-              t.id === source.id ? source : t.id === target.id ? target : t,
+              tables.find((updated) => updated.id === t.id) ?? t,
             ),
             selTable: destId,
             panel: 'summary',
@@ -2786,8 +2868,8 @@ function usePosState() {
         // is done, so the wait here is the most visible one.
         patch({ tblBusyId: otherId });
         try {
-          await tablesApi.mergeTables(src.id, otherId);
-          await actions.loadTables();
+          const tables = await tablesApi.mergeTables(src.id, otherId);
+          patch({ tables: ref.current.tables.map((table) => tables.find((updated) => updated.id === table.id) ?? table) });
           patch({ tblBusyId: null, panel: 'summary' });
           const other = ref.current.tables.find((t) => t.id === otherId);
           flash(`${src.name} and ${other?.name ?? 'that table'} now share one bill`);
@@ -2801,16 +2883,24 @@ function usePosState() {
         patch({ splitMap: { ...ref.current.splitMap, [row]: bill } }),
 
       loadBoard: async () => {
-        patch({ kdsLoading: true, kdsError: '' });
-        try {
-          const { columns } = await kitchenApi.getBoard();
-          // The board arrives grouped; the screen renders a flat list and
-          // buckets by status itself, so flatten back in placedAt order.
-          const tickets = KDS_COLS.flatMap((col) => columns[col.id] ?? []);
-          patch({ tickets, kdsLoading: false });
-        } catch (err) {
-          patch({ kdsLoading: false, kdsError: describe(err, 'Could not load the board.') });
-        }
+        patch({ tickets: ref.current.tickets.filter((ticket) => ticket.expiresAt > Date.now()) });
+        if (boardRequest.current) { boardRefreshQueued.current = true; return boardRequest.current; }
+        const userId = ref.current.user?.id;
+        boardRequest.current = (async () => {
+          patch({ kdsLoading: true, kdsError: '' });
+          try {
+            const { columns, nextResetAt } = await kitchenApi.getBoard();
+            if (ref.current.user?.id !== userId) return;
+            const tickets = KDS_COLS.flatMap((col) => columns[col.id] ?? []).filter((ticket) => ticket.expiresAt > Date.now());
+            patch({ tickets, kdsResetAt: nextResetAt, kdsLoading: false });
+          } catch (err) {
+            if (ref.current.user?.id === userId) patch({ kdsLoading: false, kdsError: describe(err, 'Could not load the board.') });
+          } finally {
+            boardRequest.current = null;
+            if (boardRefreshQueued.current) { boardRefreshQueued.current = false; void actions.loadBoard(); }
+          }
+        })();
+        return boardRequest.current;
       },
 
       /**
@@ -2825,7 +2915,7 @@ function usePosState() {
 
         try {
           const updated = await kitchenApi.advanceTicket(id);
-          patch({ tickets: s.tickets.map((t) => (t.id === id ? updated : t)) });
+          patch({ tickets: ref.current.tickets.map((t) => (t.id === id ? updated : t)) });
           flash(`Order #${updated.no} → ${KDS_COLS.find((c) => c.id === updated.status)?.label}`);
         } catch (err) {
           warn(describe(err, 'Could not move that ticket.'));
@@ -2834,10 +2924,9 @@ function usePosState() {
       },
 
       recallTicket: async (id: string) => {
-        const s = ref.current;
         try {
           const updated = await kitchenApi.recallTicket(id);
-          patch({ tickets: s.tickets.map((t) => (t.id === id ? updated : t)) });
+          patch({ tickets: ref.current.tickets.map((t) => (t.id === id ? updated : t)) });
           flash(`Order #${updated.no} recalled`);
         } catch (err) {
           warn(describe(err, 'Could not recall that ticket.'));
@@ -2850,13 +2939,40 @@ function usePosState() {
       },
 
       loadDashboard: async () => {
-        patch({ dashLoading: true, dashError: '' });
+        const since = operationalWindow().recentSince;
+        if (ref.current.dash) patch({ dash: { ...ref.current.dash,
+          recentOrders: ref.current.dash.recentOrders.filter((order) => Date.parse(order.createdAt) >= since) } });
+        if (dashboardRequest.current) return dashboardRequest.current;
+        const userId = ref.current.user?.id;
+        dashboardRequest.current = (async () => {
+          patch({ dashLoading: true, dashError: '' });
+          try {
+            const dash = await dashboardApi.getDashboard();
+            if (ref.current.user?.id === userId) patch({ dash: { ...dash,
+              recentOrders: dash.recentOrders.filter((order) => Date.parse(order.createdAt) >= operationalWindow().recentSince) }, dashLoading: false });
+          } catch (err) {
+            if (ref.current.user?.id === userId) patch({ dashLoading: false, dashError: describe(err, 'Could not load the dashboard.') });
+          } finally { dashboardRequest.current = null; }
+        })();
+        return dashboardRequest.current;
+      },
+
+      loadMoreRecent: async () => {
+        const dash = ref.current.dash;
+        if (!dash?.recentNextCursor || ref.current.recentLoading || ref.current.dashLoading) return;
+        const userId = ref.current.user?.id;
+        patch({ recentLoading: true });
         try {
-          const dash = await dashboardApi.getDashboard();
-          patch({ dash, dashLoading: false });
-        } catch (err) {
-          patch({ dashLoading: false, dashError: describe(err, 'Could not load the dashboard.') });
-        }
+          const page = await dashboardApi.getRecentOrders(dash.recentNextCursor);
+          if (ref.current.user?.id !== userId || ref.current.dash !== dash) return;
+          const seen = new Set(dash.recentOrders.map((order) => order.id));
+          patch({ dash: { ...dash, ...page,
+            recentOrders: [...dash.recentOrders, ...page.recentOrders.filter((order) => !seen.has(order.id))]
+              .filter((order) => Date.parse(order.createdAt) >= operationalWindow().recentSince) } });
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409) void actions.loadDashboard();
+          else warn(describe(error, 'Could not load more orders.'));
+        } finally { patch({ recentLoading: false }); }
       },
 
       /**
@@ -3080,6 +3196,8 @@ function usePosState() {
           customerPhone: customer.phone,
           customerKnown: true,
           orderTable: null,
+          orderTables: [],
+          draftTableIds: [],
         });
         flash(`New order started for ${customer.name}`);
       },

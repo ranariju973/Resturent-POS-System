@@ -12,6 +12,8 @@
  */
 import mongoose from 'mongoose';
 import { tenantScoped } from './plugins/tenantScoped.js';
+import { nextServiceReset } from '../utils/date.js';
+import { liveTicketFilter } from '../utils/ticketExpiry.js';
 import {
   TICKET_STATUS,
   TICKET_STATUS_VALUES,
@@ -47,7 +49,7 @@ const ticketSchema = new mongoose.Schema(
     no: { type: Number, required: true, index: true },
 
     /** Human label on the board — 'Table T3', 'Takeaway', 'Delivery'. */
-    source: { type: String, required: true, trim: true, maxlength: 40 },
+    source: { type: String, required: true, trim: true, maxlength: 800 },
 
     type: {
       type: String,
@@ -64,6 +66,7 @@ const ticketSchema = new mongoose.Schema(
     },
 
     placedAt: { type: Date, required: true, default: Date.now, index: true },
+    expiresAt: { type: Date, required: true, default() { return nextServiceReset(this.placedAt); } },
 
     /** Stamped when the ticket first reaches 'ready' — prep duration endpoint. */
     readyAt: { type: Date, default: null },
@@ -116,6 +119,8 @@ ticketSchema.plugin(tenantScoped, {
 // The kitchen board query: everything not yet served, oldest first.
 ticketSchema.index({ tenantId: 1, status: 1, placedAt: 1 });
 ticketSchema.index({ tenantId: 1, placedAt: -1 });
+// TTL must be a single-field index. It deletes tickets only, never their orders.
+ticketSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 /**
  * The board also keeps recently-served tickets visible for a grace period —
  * getBoard's $or has a { status: SERVED, updatedAt: { $gte } } branch. Served
@@ -200,6 +205,7 @@ ticketSchema.statics.findActive = function findActive(filter = {}) {
   // trusted() because `sanitizeFilter` is on globally — see src/config/db.js.
   return this.find({
     ...filter,
+    ...liveTicketFilter(),
     status: mongoose.trusted({ $ne: TICKET_STATUS.SERVED }),
   }).sort({ placedAt: 1 });
 };

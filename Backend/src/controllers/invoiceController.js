@@ -53,7 +53,7 @@ const publicInvoice = (order, tenant) => ({
   paymentMethod: order.paymentMethod,
 
   // Populated, so these are names rather than ids.
-  tableName: order.table?.name ?? null,
+  tableName: order.tableNames?.length ? order.tableNames.join(' + ') : order.table?.name ?? null,
   customerName: order.customer?.name ?? null,
 
   items: order.items.map((line) => ({

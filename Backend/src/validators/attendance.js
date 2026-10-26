@@ -26,7 +26,7 @@ const isoDay = z
 const isoMonth = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Month must be YYYY-MM');
 
 const status = z.enum(ATTENDANCE_STATUS_VALUES, {
-  errorMap: () => ({ message: 'Invalid attendance status' }),
+  error: 'Invalid attendance status',
 });
 
 const notes = z.string().trim().max(200, 'Notes are too long');

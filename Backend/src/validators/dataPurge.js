@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const purgeConfirmSchema = z
   .object({
     confirm: z.literal('DELETE', {
-      errorMap: () => ({ message: 'You must type DELETE to confirm' }),
+      error: 'You must type DELETE to confirm',
     }),
   })
   .strict();

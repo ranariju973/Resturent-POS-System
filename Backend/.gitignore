@@ -15,3 +15,7 @@ dist/
 
 # Local env backups — contain real credentials, never commit
 .env.*backup
+
+# Environment variants and backups may contain credentials.
+.env.*
+!.env.example

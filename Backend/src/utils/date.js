@@ -1,33 +1,29 @@
-/**
- * Service-day boundaries.
- *
- * Lived inside reportController until the stats cache needed to know whether a
- * requested date is today — a report for a finished day can be held far longer
- * than one still being written to. Copying the function into the cache would
- * have meant two definitions of "what day is it", which is exactly the kind of
- * thing that agrees in testing and disagrees at midnight.
- *
- * All of these use SERVER LOCAL TIME, deliberately and consistently with
- * Counter.serviceDayKey(). A restaurant's day is the one its staff are
- * standing in, not UTC. The consequence is that the host's timezone is part of
- * the configuration: deploy to a UTC host and the day boundary moves, which
- * splits an evening service across two report dates.
- */
+/** India calendar days and 04:00 service days, independent of the host TZ. */
+export const BUSINESS_TIMEZONE = 'Asia/Kolkata';
+export const DAY_MS = 86_400_000;
+const INDIA_OFFSET_MS = 330 * 60_000;
+const RESET_MS = 4 * 3_600_000;
 
-/** Today as YYYY-MM-DD, in server local time. */
-export const todayIso = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+export const todayIso = (now = new Date()) =>
+  new Date(new Date(now).getTime() + INDIA_OFFSET_MS).toISOString().slice(0, 10);
+export const dayStart = (iso) => new Date(`${iso}T00:00:00+05:30`);
+export const dayEnd = (iso) => new Date(dayStart(iso).getTime() + DAY_MS);
 
-/** Midnight opening a given YYYY-MM-DD. */
-export const dayStart = (iso) => new Date(`${iso}T00:00:00`);
+export function monthStart(month, offset = 0) {
+  const [year, number] = month.split('-').map(Number);
+  return new Date(Date.UTC(year, number - 1 + offset, 1) - INDIA_OFFSET_MS);
+}
 
-/** Midnight closing it — exclusive upper bound, so ranges are [start, end). */
-export const dayEnd = (iso) => {
-  const d = new Date(`${iso}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  return d;
-};
+export function serviceWindow(now = new Date()) {
+  const time = new Date(now).getTime();
+  const start = Math.floor((time + INDIA_OFFSET_MS - RESET_MS) / DAY_MS) * DAY_MS
+    - INDIA_OFFSET_MS + RESET_MS;
+  return {
+    serviceStart: new Date(start),
+    recentSince: new Date(start - DAY_MS),
+    nextResetAt: new Date(start + DAY_MS),
+  };
+}
 
-export default { todayIso, dayStart, dayEnd };
+export const nextServiceReset = (placedAt = new Date()) => serviceWindow(placedAt).nextResetAt;
+export default { todayIso, dayStart, dayEnd, monthStart, serviceWindow, nextServiceReset };

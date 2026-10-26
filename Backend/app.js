@@ -41,6 +41,7 @@ import attendanceRoutes from './src/routes/attendance.js';
 import payrollRoutes from './src/routes/payroll.js';
 import auditRoutes from './src/routes/audit.js';
 import dataPurgeRoutes from './src/routes/dataPurge.js';
+import { safeRequestPath } from './src/utils/logRedaction.js';
 const app = express();
 
 // Behind a reverse proxy (nginx, Render, Railway, Fly) req.ip must come from
@@ -55,6 +56,12 @@ app.disable('x-powered-by');
 app.set('query parser', 'simple');
 
 app.use(requestId);
+
+// Operational data and credentials must never be reused by a browser or proxy.
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 
 // --- Security headers ------------------------------------------------------
 // This is a JSON API: it serves no HTML, so the CSP can deny everything by
@@ -140,11 +147,12 @@ app.use(compression());
 // noisy and coloured; production uses a fixed field set with no request body.
 if (!env.isTest) {
   morgan.token('id', (req) => req.id);
+  morgan.token('safe-path', safeRequestPath);
   app.use(
     morgan(
       env.isProd
-        ? ':id :remote-addr :method :url :status :response-time ms'
-        : ':method :url :status :response-time ms',
+        ? ':id :remote-addr :method :safe-path :status :response-time ms'
+        : ':method :safe-path :status :response-time ms',
       { stream: httpLogStream },
     ),
   );

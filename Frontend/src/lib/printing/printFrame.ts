@@ -158,7 +158,9 @@ function printViaWindow(html: string, paper: PaperWidth): Promise<void> {
         win.focus();
         win.print();
       } catch {
-        /* Leave the tab open with the receipt visible. */
+        // Keep the receipt visible, but do not report a failed print as sent.
+        reject(new Error('Printing failed. Retry printing this receipt from the browser menu.'));
+        return;
       }
       done();
     })();
@@ -177,7 +179,7 @@ export function printHtml(html: string, paper: PaperWidth): Promise<void> {
   // instead. See the note above printViaWindow.
   if (isMobileViewport()) return printViaWindow(html, paper);
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const frame = document.createElement('iframe');
 
     /*
@@ -199,12 +201,13 @@ export function printHtml(html: string, paper: PaperWidth): Promise<void> {
     document.body.appendChild(frame);
 
     let done = false;
-    const finish = () => {
+    const finish = (error?: Error) => {
       if (done) return;
       done = true;
       window.clearTimeout(timer);
       frame.remove();
-      resolve();
+      if (error) reject(error);
+      else resolve();
     };
     // The fallback for browsers that never fire afterprint. Long enough that a
     // user reading the dialog is not cut off mid-decision.
@@ -212,13 +215,13 @@ export function printHtml(html: string, paper: PaperWidth): Promise<void> {
 
     const doc = frame.contentDocument;
     const win = frame.contentWindow;
-    if (!doc || !win) return finish();
+    if (!doc || !win) return finish(new Error('Could not open the receipt for printing.'));
 
     doc.open();
     doc.write(`<!doctype html><html><head><meta charset="utf-8"><style>${receiptCss(paper)}</style></head><body>${html}</body></html>`);
     doc.close();
 
-    win.addEventListener('afterprint', finish);
+    win.addEventListener('afterprint', () => finish());
 
     void (async () => {
       await nextFrame();
@@ -233,7 +236,7 @@ export function printHtml(html: string, paper: PaperWidth): Promise<void> {
         win.focus();
         win.print();
       } catch {
-        finish();
+        finish(new Error('Printing failed. Retry printing this receipt.'));
       }
     })();
   });

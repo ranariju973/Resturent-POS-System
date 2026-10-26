@@ -61,11 +61,12 @@ export function OrderDetail({ mayDelete }: { mayDelete: boolean }) {
         }}
       >
         <span style={{ textTransform: 'capitalize' }}>{order.type}</span>
+        {order.tableNames?.length ? <span>Table {order.tableNames.join(' + ')}</span> : null}
         <span>{STATUS_LABEL[order.status]}</span>
         {order.paymentMethod ? (
           <span style={{ textTransform: 'capitalize' }}>Paid by {order.paymentMethod}</span>
         ) : null}
-        <span>{new Date(order.createdAt).toLocaleString()}</span>
+        <span>{new Date(order.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</span>
       </div>
 
       {order.status === 'voided' && order.voidReason ? (

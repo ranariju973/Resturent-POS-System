@@ -57,7 +57,7 @@ const pin = z
   .regex(new RegExp(`^\\d{${PIN_LENGTH}}$`), `PIN must be exactly ${PIN_LENGTH} digits`);
 
 const role = z.enum([...PIN_ROLES], {
-  errorMap: () => ({ message: 'Role must be cashier or kitchen_staff' }),
+  error: 'Role must be cashier or kitchen_staff',
 });
 
 /**

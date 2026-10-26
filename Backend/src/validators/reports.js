@@ -88,7 +88,7 @@ export const createExpenseSchema = z
   .object({
     date: isoDay,
     category: z.enum(EXPENSE_CATEGORY_VALUES, {
-      errorMap: () => ({ message: 'Invalid expense category' }),
+      error: 'Invalid expense category',
     }),
     description: z.string().trim().min(2, 'Description is too short').max(200),
     amount: z.union([z.number(), z.string()]).transform((v, ctx) => {
@@ -124,3 +124,7 @@ export default {
   createExpenseSchema,
   idParamSchema,
 };
+
+export const recentOrdersSchema = z.object({
+  cursor: z.string().max(64).regex(/^\d{13}_[0-9a-f]{24}_\d{13}$/).optional(),
+}).strict();

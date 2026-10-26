@@ -23,6 +23,8 @@
  */
 import mongoose from 'mongoose';
 import { logger } from './logger.js';
+import { env } from '../config/env.js';
+import { ApiError } from './apiResponse.js';
 
 /** null = not yet determined. */
 let transactionsSupported = null;
@@ -69,10 +71,13 @@ async function detectSupport() {
  * @param {(session: import('mongoose').ClientSession|null) => Promise<T>} fn
  * @returns {Promise<T>}
  */
-export async function withTransaction(fn) {
+export async function withTransaction(fn, { required = false } = {}) {
   const supported = await detectSupport();
 
   if (!supported) {
+    if (required || env.isProd) {
+      throw new ApiError(503, 'This operation requires a MongoDB replica set.');
+    }
     // Degraded path. Already warned above; the caller's logic is unchanged.
     return fn(null);
   }

@@ -1,3 +1,4 @@
+import { safeRequestPath } from '../utils/logRedaction.js';
 /**
  * NoSQL injection defence.
  *
@@ -47,7 +48,7 @@ export const sanitizeRequest = mongoSanitize({
       userId: req.user?.id,
       key,
       method: req.method,
-      path: req.originalUrl,
+      path: safeRequestPath(req),
       ip: req.ip,
     });
   },

@@ -98,21 +98,21 @@ export async function releaseTable(id: string): Promise<Table> {
 export async function transferTable(
   id: string,
   targetTableId: string,
-): Promise<{ source: Table; target: Table }> {
-  const data = await api<{ source: TableDto; target: TableDto }>(`/api/tables/${id}/transfer`, {
+): Promise<{ source: Table; target: Table; tables: Table[] }> {
+  const data = await api<{ source: TableDto; target: TableDto; tables: TableDto[] }>(`/api/tables/${id}/transfer`, {
     method: 'POST',
     body: { targetTableId },
   });
-  return { source: toTable(data.source), target: toTable(data.target) };
+  return { source: toTable(data.source), target: toTable(data.target), tables: data.tables.map(toTable) };
 }
 
 /** Refused when both tables hold bills, and refused if it would build a chain. */
-export async function mergeTables(id: string, targetTableId: string): Promise<Table> {
-  const data = await api<{ table: TableDto }>(`/api/tables/${id}/merge`, {
+export async function mergeTables(id: string, targetTableId: string): Promise<Table[]> {
+  const data = await api<{ tables: TableDto[] }>(`/api/tables/${id}/merge`, {
     method: 'POST',
     body: { targetTableId },
   });
-  return toTable(data.table);
+  return data.tables.map(toTable);
 }
 
 export async function unmergeTable(id: string): Promise<Table> {

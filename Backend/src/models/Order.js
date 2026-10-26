@@ -104,6 +104,10 @@ const orderSchema = new mongoose.Schema(
     // covers this key. Declaring both makes Mongoose build two indexes on
     // { table: 1 } and warn about the duplicate at boot.
     table: { type: mongoose.Schema.Types.ObjectId, ref: 'Table', default: null },
+    tableIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Table' }],
+    tableNames: [{ type: String, maxlength: 12 }],
+    clientRequestId: { type: String, default: null, select: false },
+    creationFingerprint: { type: String, default: null, select: false },
 
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null, index: true },
 
@@ -165,6 +169,7 @@ const orderSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    optimisticConcurrency: true,
     toJSON: {
       virtuals: true,
       transform(_doc, ret) {
@@ -187,6 +192,14 @@ orderSchema.virtual('id').get(function idGetter() {
  */
 orderSchema.plugin(tenantScoped, {
   unique: [
+    {
+      fields: { tableIds: 1 },
+      options: { partialFilterExpression: { status: ORDER_STATUS.OPEN, 'tableIds.0': { $exists: true } } },
+    },
+    {
+      fields: { clientRequestId: 1 },
+      options: { partialFilterExpression: { clientRequestId: { $type: 'string' } } },
+    },
     /*
      * Sparse because every order predating this feature has null, and a plain
      * unique index would reject the second one. Unique because the invoice
@@ -228,6 +241,7 @@ orderSchema.index({ tenantId: 1, status: 1, paidAt: -1 });
 // purge check depends on it; without it that check gets slower every service.
 orderSchema.index({ tenantId: 1, 'items.menuItem': 1 });
 orderSchema.index({ tenantId: 1, createdAt: -1 });
+orderSchema.index({ tenantId: 1, createdAt: -1, _id: -1 });
 orderSchema.index({ tenantId: 1, createdBy: 1, createdAt: -1 });
 
 /**

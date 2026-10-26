@@ -18,3 +18,7 @@ coverage/
 
 # Vite's dependency pre-bundling cache. Auto-generated, safe to delete.
 .vite/
+
+# Environment variants and backups may contain credentials.
+.env.*
+!.env.example

@@ -31,10 +31,13 @@ import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { splitMinor, toMajor } from '../utils/money.js';
 import { assertTableUnreferenced } from '../utils/referenceGuard.js';
 import { publicTable } from '../utils/publicTable.js';
+import { withTransaction } from '../utils/transaction.js';
+import { orderTableIds, setOrderTables } from '../utils/orderTables.js';
+import { emitEvent, EVENTS } from '../utils/eventBus.js';
 
 /** Load a live table or 404. */
-async function loadTable(id) {
-  const table = await Table.findOne({ _id: id, isActive: true });
+async function loadTable(id, session = null) {
+  const table = await Table.findOne({ _id: id, isActive: true }).session(session);
   if (!table) throw ApiError.notFound('Table not found');
   return table;
 }
@@ -258,20 +261,17 @@ export const reserveTable = asyncHandler(async (req, res) => {
  * the order and where it was run up, and the order would never be settled.
  */
 export const releaseTable = asyncHandler(async (req, res) => {
-  const table = await loadTable(req.params.id);
-
-  if (table.currentOrder) {
-    throw ApiError.conflict('Settle or void the open bill before releasing this table');
-  }
-
-  const absorbed = await Table.countDocuments({ mergedInto: table._id, isActive: true });
-  if (absorbed > 0) {
-    throw ApiError.conflict('Unmerge the tables joined to this one before releasing it');
-  }
-
-  table.release();
-  await table.save();
-
+  const table = await withTransaction(async (session) => {
+    const table = await loadTable(req.params.id, session);
+    if (table.currentOrder) throw ApiError.conflict('Settle or void the open bill before releasing this table');
+    if (table.mergedInto || await Table.exists({ mergedInto: table._id, isActive: true }).session(session)) {
+      throw ApiError.conflict('Unmerge the tables joined to this one before releasing it');
+    }
+    const released = await Table.findOneAndUpdate({ _id: table._id, currentOrder: null, mergedInto: null },
+      { $set: { status: TABLE_STATUS.AVAILABLE, occupiedAt: null } }, { new: true, session });
+    if (!released) throw ApiError.conflict('This table changed. Refresh the floor.');
+    return released;
+  }, { required: true });
   return sendSuccess(res, { table: publicTable(table) });
 });
 
@@ -289,60 +289,29 @@ export const releaseTable = asyncHandler(async (req, res) => {
  */
 export const transferTable = asyncHandler(async (req, res) => {
   const { targetTableId } = req.body;
-  const source = await loadTable(req.params.id);
-
-  if (String(source._id) === String(targetTableId)) {
-    throw ApiError.badRequest('Source and destination are the same table');
-  }
-  if (!source.currentOrder) {
-    throw ApiError.conflict('That table has no open bill to transfer');
-  }
-
-  // Claim the destination, or fail without side effects.
-  const target = await Table.findOneAndUpdate(
-    {
-      _id: targetTableId,
-      isActive: true,
+  if (req.params.id === targetTableId) throw ApiError.badRequest('Source and destination are the same table');
+  const result = await withTransaction(async (session) => {
+    const source = await loadTable(req.params.id, session);
+    if (!source.currentOrder) throw ApiError.conflict('That table has no open bill to transfer');
+    const order = await Order.findOne({ _id: source.currentOrder, status: ORDER_STATUS.OPEN }).session(session);
+    if (!order) throw ApiError.conflict('That bill is no longer open');
+    const target = await Table.findOneAndUpdate({ _id: targetTableId, isActive: true,
       status: mongoose.trusted({ $in: [TABLE_STATUS.AVAILABLE, TABLE_STATUS.RESERVED] }),
-      currentOrder: null,
-    },
-    {
-      $set: {
-        status: TABLE_STATUS.OCCUPIED,
-        currentOrder: source.currentOrder,
-        occupiedAt: source.occupiedAt ?? new Date(),
-      },
-    },
-    { new: true },
-  );
-
-  if (!target) {
-    const exists = await Table.exists({ _id: targetTableId, isActive: true });
-    if (!exists) throw ApiError.notFound('Destination table not found');
-    throw ApiError.conflict('The destination table is not free');
-  }
-
-  const orderId = source.currentOrder;
-
-  // Point the order back at its new table, then clear the source.
-  await Order.updateOne({ _id: orderId }, { $set: { table: target._id } });
-  source.release();
-  await source.save();
-
-  await AuditLog.record(
-    {
-      action: AUDIT_ACTION.TABLE_UPDATE,
-      resource: 'Table',
-      resourceId: source._id,
-      meta: { transferredTo: String(target._id), order: String(orderId) },
-    },
-    req,
-  );
-
-  return sendSuccess(res, {
-    source: publicTable(source),
-    target: publicTable(target),
-  });
+      currentOrder: null, mergedInto: null,
+    }, { $set: { currentOrder: order._id, status: TABLE_STATUS.OCCUPIED,
+      occupiedAt: source.occupiedAt ?? new Date() } }, { new: true, session });
+    if (!target) throw ApiError.conflict('The destination table is not free');
+    const ids = orderTableIds(order).map((id) => id === String(source._id) ? String(target._id) : id);
+    const tables = await setOrderTables(order, ids, session);
+    source.release();
+    await source.save({ session });
+    await AuditLog.record({ action: AUDIT_ACTION.TABLE_UPDATE, resource: 'Table', resourceId: source._id,
+      meta: { transferredTo: String(target._id), order: String(order._id) } }, req, { session });
+    return { source: publicTable(source), target: tables.find((table) => table.id === String(target._id)),
+      tables: [...tables, publicTable(source)] };
+  }, { required: true });
+  emitEvent(EVENTS.TABLE_CHANGED, {});
+  return sendSuccess(res, result);
 });
 
 // ---------------------------------------------------------------------------
@@ -359,79 +328,63 @@ export const transferTable = asyncHandler(async (req, res) => {
  */
 export const mergeTable = asyncHandler(async (req, res) => {
   const { targetTableId } = req.body;
-  const source = await loadTable(req.params.id);
-
-  if (String(source._id) === String(targetTableId)) {
-    throw ApiError.badRequest('Cannot merge a table into itself');
-  }
-  if (source.mergedInto) {
-    throw ApiError.conflict('That table is already merged into another');
-  }
-
-  const target = await loadTable(targetTableId);
-
-  // No chains: merging A into B when B is itself merged into C would leave the
-  // bill somewhere neither terminal is looking.
-  if (target.mergedInto) {
-    throw ApiError.conflict('The destination table is itself merged into another table');
-  }
-
-  if (source.currentOrder && target.currentOrder) {
-    throw ApiError.conflict(
-      'Both tables have open bills — settle or transfer one before merging',
-    );
-  }
-
-  // If only the source has a bill, it moves to the target.
-  const movingOrder = source.currentOrder ?? null;
-
-  const claimed = await Table.findOneAndUpdate(
-    { _id: target._id, isActive: true, mergedInto: null },
-    {
-      $set: {
-        status: TABLE_STATUS.OCCUPIED,
-        ...(movingOrder ? { currentOrder: movingOrder } : {}),
-        occupiedAt: target.occupiedAt ?? source.occupiedAt ?? new Date(),
-      },
-    },
-    { new: true },
-  );
-
-  if (!claimed) throw ApiError.conflict('The destination table changed — try again');
-
-  if (movingOrder) await Order.updateOne({ _id: movingOrder }, { $set: { table: claimed._id } });
-
-  source.currentOrder = null;
-  source.mergedInto = claimed._id;
-  source.status = TABLE_STATUS.OCCUPIED;
-  await source.save();
-
-  await AuditLog.record(
-    {
-      action: AUDIT_ACTION.TABLE_UPDATE,
-      resource: 'Table',
-      resourceId: source._id,
-      meta: { mergedInto: String(claimed._id), movedOrder: movingOrder ? String(movingOrder) : null },
-    },
-    req,
-  );
-
-  return sendSuccess(res, { source: publicTable(source), target: publicTable(claimed) });
+  if (req.params.id === targetTableId) throw ApiError.badRequest('Cannot merge a table into itself');
+  const result = await withTransaction(async (session) => {
+    const source = await loadTable(req.params.id, session);
+    const target = await loadTable(targetTableId, session);
+    if (source.mergedInto || target.mergedInto) throw ApiError.conflict('Select the primary table of each group');
+    if (source.currentOrder && target.currentOrder) {
+      throw ApiError.conflict('Both tables have open bills — settle or transfer one before merging');
+    }
+    const members = await Table.find({ isActive: true, $or: [
+      { _id: mongoose.trusted({ $in: [source._id, target._id] }) },
+      { mergedInto: mongoose.trusted({ $in: [source._id, target._id] }) },
+    ] }).session(session);
+    if (members.length > 50) throw ApiError.badRequest('A shared bill supports up to 50 tables');
+    const orderId = target.currentOrder ?? source.currentOrder;
+    if (members.some((table) => table.currentOrder && String(table.currentOrder) !== String(orderId))) {
+      throw ApiError.conflict('A table in this group has a different bill');
+    }
+    const ids = [String(target._id), ...members.filter((table) => String(table._id) !== String(target._id)).map((table) => String(table._id))];
+    let tables;
+    if (orderId) {
+      const order = await Order.findOne({ _id: orderId, status: ORDER_STATUS.OPEN }).session(session);
+      if (!order) throw ApiError.conflict('That bill is no longer open');
+      tables = await setOrderTables(order, ids, session);
+    } else {
+      for (const table of members) {
+        table.status = TABLE_STATUS.OCCUPIED;
+        table.occupiedAt ??= new Date();
+        table.mergedInto = String(table._id) === String(target._id) ? null : target._id;
+        await table.save({ session });
+      }
+      tables = members.map(publicTable);
+    }
+    await AuditLog.record({ action: AUDIT_ACTION.TABLE_UPDATE, resource: 'Table', resourceId: source._id,
+      meta: { mergedInto: String(target._id), order: orderId ? String(orderId) : null } }, req, { session });
+    return { source: tables.find((table) => table.id === String(source._id)),
+      target: tables.find((table) => table.id === String(target._id)), tables };
+  }, { required: true });
+  emitEvent(EVENTS.TABLE_CHANGED, {});
+  return sendSuccess(res, result);
 });
 
 // ---------------------------------------------------------------------------
 // POST /api/tables/:id/unmerge      (admin, cashier)
 // ---------------------------------------------------------------------------
 export const unmergeTable = asyncHandler(async (req, res) => {
-  const table = await loadTable(req.params.id);
-
-  if (!table.mergedInto) throw ApiError.conflict('That table is not merged into another');
-
-  table.mergedInto = null;
-  table.status = TABLE_STATUS.AVAILABLE;
-  table.occupiedAt = null;
-  await table.save();
-
+  const table = await withTransaction(async (session) => {
+    const table = await loadTable(req.params.id, session);
+    if (!table.mergedInto) throw ApiError.conflict('That table is not merged into another');
+    const primary = await loadTable(table.mergedInto, session);
+    if (table.currentOrder || primary.currentOrder) throw ApiError.conflict('Settle or void the shared bill before unmerging');
+    // Touch the primary so simultaneous group creation cannot leave a stranded member.
+    primary.markModified('status');
+    await primary.save({ session });
+    table.release();
+    await table.save({ session });
+    return table;
+  }, { required: true });
   return sendSuccess(res, { table: publicTable(table) });
 });
 

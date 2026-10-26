@@ -20,18 +20,17 @@
  * ambient request context. That prefix is what stops one restaurant's cached
  * dashboard, menu or receipt header being served to another.
  *
- * ── What this is NOT ───────────────────────────────────────────────────────
- * There is no bound on entry count. Every current caller uses a small, fixed
- * set of keys (the menu, one dashboard per role, one report per date), so the
- * map cannot grow with traffic. Do NOT cache anything keyed by something a
- * user controls — an order id, a search term — without adding an eviction
- * policy first, or this becomes a memory leak with a friendly interface.
+ * Expired entries are swept on writes; the oldest entry is evicted at 2,048.
+ * Concurrent reads of the same missing key share one loader. Invalidation
+ * also prevents an earlier in-flight loader from repopulating stale data.
  */
 import { logger } from './logger.js';
 import { getTenantId } from './tenantContext.js';
 
 /** @type {Map<string, { value: unknown, expiresAt: number }>} */
 const store = new Map();
+const inFlight = new Map();
+const MAX_ENTRIES = 2048;
 
 /**
  * Used when a key is built outside any request — a boot-time warm-up, a
@@ -81,6 +80,10 @@ export async function get(k) {
 
 /** Store a value for `ttlMs`. */
 export async function set(k, value, ttlMs) {
+  for (const [existing, entry] of store) {
+    if (entry.expiresAt <= Date.now()) store.delete(existing);
+  }
+  if (!store.has(k) && store.size >= MAX_ENTRIES) store.delete(store.keys().next().value);
   store.set(k, { value, expiresAt: Date.now() + ttlMs });
   return value;
 }
@@ -88,6 +91,7 @@ export async function set(k, value, ttlMs) {
 /** Drop one key. */
 export async function del(k) {
   store.delete(k);
+  inFlight.delete(k);
 }
 
 /**
@@ -101,6 +105,7 @@ export async function delPrefix(prefix) {
   for (const k of store.keys()) {
     if (k.startsWith(prefix)) store.delete(k);
   }
+  for (const k of inFlight.keys()) if (k.startsWith(prefix)) inFlight.delete(k);
 }
 
 /**
@@ -113,14 +118,19 @@ export async function remember(k, ttlMs, compute) {
   const hit = await get(k);
   if (hit !== null) return hit;
 
-  const value = await compute();
-  await set(k, value, ttlMs);
-  return value;
+  if (inFlight.has(k)) return inFlight.get(k);
+  const pending = Promise.resolve().then(compute).then(async (value) => {
+    if (inFlight.get(k) === pending) await set(k, value, ttlMs);
+    return value;
+  }).finally(() => { if (inFlight.get(k) === pending) inFlight.delete(k); });
+  inFlight.set(k, pending);
+  return pending;
 }
 
 /** Testing and shutdown only. */
 export function clearAll() {
   store.clear();
+  inFlight.clear();
 }
 
 /** Entry count, for the health check and tests. Not a hit rate. */

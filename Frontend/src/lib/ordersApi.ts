@@ -58,6 +58,8 @@ export async function getOrder(id: string, signal?: AbortSignal): Promise<Order>
 export async function createOrder(input: {
   type: OrderType;
   tableId?: string;
+  tableIds?: string[];
+  clientRequestId?: string;
   /** An existing customer by id. Mutually exclusive with `customer`. */
   customerId?: string;
   /**
@@ -79,14 +81,14 @@ export async function createOrder(input: {
    * either way, so an over-limit discount still needs `adminOverridePin`.
    */
   discount?: { type: 'percent' | 'fixed'; value: string; adminOverridePin?: string };
-}): Promise<{ order: Order; ticketId: string; table: Table | null }> {
-  const data = await api<{ order: OrderDto; ticketId: string; table: TableDto | null }>(
+}): Promise<{ order: Order; ticketId: string | null; table: Table | null; tables: Table[] }> {
+  const data = await api<{ order: OrderDto; ticketId: string | null; table: TableDto | null; tables: TableDto[] }>(
     '/api/orders',
     { method: 'POST', body: input },
   );
   // Mapped here rather than in the store, the same way listTables does it —
   // DTO shapes stay inside lib/, and the store only ever sees domain types.
-  return { ...data, table: data.table ? toTable(data.table) : null };
+  return { ...data, table: data.table ? toTable(data.table) : null, tables: (data.tables ?? []).map(toTable) };
 }
 
 /** Replace every line on an open order — the cart being edited. */
@@ -144,13 +146,13 @@ export interface InvoiceLink {
  */
 export async function payOrder(
   id: string,
-  input: { paymentMethod: PaymentMethod; customerId?: string },
-): Promise<{ order: Order; invoice: InvoiceLink | null }> {
-  const data = await api<{ order: OrderDto; invoice?: InvoiceLink }>(
+  input: { paymentMethod: PaymentMethod; customerId?: string; version?: number },
+): Promise<{ order: Order; invoice: InvoiceLink | null; tables: Table[]; replayed: boolean }> {
+  const data = await api<{ order: OrderDto; invoice?: InvoiceLink; tables: TableDto[]; replayed: boolean }>(
     `/api/orders/${id}/pay`,
     { method: 'POST', body: input },
   );
-  return { order: data.order, invoice: data.invoice ?? null };
+  return { order: data.order, invoice: data.invoice ?? null, tables: (data.tables ?? []).map(toTable), replayed: data.replayed };
 }
 
 /**
@@ -174,11 +176,11 @@ export async function deleteOrder(id: string, reason: string): Promise<void> {
  */
 export async function voidOrder(
   id: string,
-  input: { reason: string; adminOverridePin?: string },
-): Promise<Order> {
-  const data = await api<{ order: OrderDto }>(`/api/orders/${id}/void`, {
+  input: { reason: string; adminOverridePin?: string; version?: number },
+): Promise<{ order: Order; tables: Table[] }> {
+  const data = await api<{ order: OrderDto; tables: TableDto[] }>(`/api/orders/${id}/void`, {
     method: 'POST',
     body: input,
   });
-  return data.order;
+  return { order: data.order, tables: (data.tables ?? []).map(toTable) };
 }

@@ -27,6 +27,10 @@ import { User } from '../models/User.js';
 import { hasPermission, PERMISSIONS } from '../constants/permissions.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { logger } from '../utils/logger.js';
+import { serviceWindow, nextServiceReset } from '../utils/date.js';
+import { liveTicketFilter } from '../utils/ticketExpiry.js';
+import { runInTenant } from '../utils/tenantContext.js';
+import { Tenant } from '../models/Tenant.js';
 
 /**
  * The ticket shape the board renders.
@@ -45,6 +49,7 @@ function publicTicket(ticket) {
     status: ticket.status,
     nextStatus: NEXT_TICKET_STATUS[ticket.status] ?? null,
     placedAt: ticket.placedAt,
+    expiresAt: ticket.expiresAt ?? nextServiceReset(ticket.placedAt),
     readyAt: ticket.readyAt,
     waitingMinutes: Math.floor(
       ((ticket.readyAt?.getTime() ?? Date.now()) - new Date(ticket.placedAt).getTime()) / 60000,
@@ -85,10 +90,10 @@ export const getBoard = asyncHandler(async (req, res) => {
 
   const filter = {
     ...(type ? { type } : {}),
-    $or: [
+    $and: [liveTicketFilter(), { $or: [
       { status: mongoose.trusted({ $ne: TICKET_STATUS.SERVED }) },
       { status: TICKET_STATUS.SERVED, updatedAt: mongoose.trusted({ $gte: servedSince }) },
-    ],
+    ] }],
   };
 
   const tickets = await Ticket.find(filter)
@@ -105,6 +110,7 @@ export const getBoard = asyncHandler(async (req, res) => {
     columns,
     counts: Object.fromEntries(TICKET_STATUS_VALUES.map((s) => [s, columns[s].length])),
     servedWithinMinutes,
+    nextResetAt: serviceWindow().nextResetAt,
   });
 });
 
@@ -114,7 +120,7 @@ export const getBoard = asyncHandler(async (req, res) => {
 export const listTickets = asyncHandler(async (req, res) => {
   const { status, type, includeServed, limit } = req.query;
 
-  const filter = {};
+  const filter = liveTicketFilter();
   if (status) filter.status = status;
   else if (includeServed !== 'true') {
     filter.status = mongoose.trusted({ $ne: TICKET_STATUS.SERVED });
@@ -133,7 +139,7 @@ export const listTickets = asyncHandler(async (req, res) => {
 // GET /api/kitchen/tickets/:id
 // ---------------------------------------------------------------------------
 export const getTicket = asyncHandler(async (req, res) => {
-  const ticket = await Ticket.findById(req.params.id).populate('order', ORDER_FIELDS);
+  const ticket = await Ticket.findOne({ _id: req.params.id, ...liveTicketFilter() }).populate('order', ORDER_FIELDS);
   if (!ticket) throw ApiError.notFound('Ticket not found');
   return sendSuccess(res, { ticket: publicTicket(ticket) });
 });
@@ -150,7 +156,7 @@ export const getTicket = asyncHandler(async (req, res) => {
  * stages ahead.
  */
 export const advanceTicket = asyncHandler(async (req, res) => {
-  const current = await Ticket.findById(req.params.id);
+  const current = await Ticket.findOne({ _id: req.params.id, ...liveTicketFilter() });
   if (!current) throw ApiError.notFound('Ticket not found');
 
   const next = NEXT_TICKET_STATUS[current.status];
@@ -162,7 +168,7 @@ export const advanceTicket = asyncHandler(async (req, res) => {
   const updated = await Ticket.findOneAndUpdate(
     // Guard on the status we just read — if someone else advanced it in the
     // meantime, this matches nothing.
-    { _id: current._id, status: current.status },
+    { _id: current._id, status: current.status, ...liveTicketFilter() },
     {
       $set: {
         status: next,
@@ -197,7 +203,7 @@ export const advanceTicket = asyncHandler(async (req, res) => {
 // PATCH /api/kitchen/tickets/:id/recall     (admin only)
 // ---------------------------------------------------------------------------
 export const recallTicket = asyncHandler(async (req, res) => {
-  const ticket = await Ticket.findById(req.params.id);
+  const ticket = await Ticket.findOne({ _id: req.params.id, ...liveTicketFilter() });
   if (!ticket) throw ApiError.notFound('Ticket not found');
 
   const index = TICKET_STATUS_VALUES.indexOf(ticket.status);
@@ -208,7 +214,7 @@ export const recallTicket = asyncHandler(async (req, res) => {
 
   const now = new Date();
   const updated = await Ticket.findOneAndUpdate(
-    { _id: ticket._id, status: ticket.status },
+    { _id: ticket._id, status: ticket.status, ...liveTicketFilter() },
     {
       $set: {
         status: previous,
@@ -253,6 +259,7 @@ export const createStreamToken = asyncHandler(async (req, res) =>
       id: req.user.id,
       role: req.user.role,
       tokenVersion: req.user.tokenVersion,
+      tenantId: req.user.tenantId,
     }),
     expiresInSeconds: STREAM_TOKEN_TTL_SECONDS,
   }),
@@ -264,8 +271,8 @@ export const createStreamToken = asyncHandler(async (req, res) =>
 /**
  * Server-Sent Events stream of board changes.
  *
- * Authenticated by the short-lived stream token rather than the normal bearer
- * header, because `EventSource` cannot set headers. The token is verified
+ * Authenticated by a short-lived stream token in the Authorization header
+ * (legacy query-token clients remain supported). The token is verified
  * here, the user re-loaded from the database, and `kitchen:view` re-checked —
  * the same "authorise from stored state, never from the token" rule the rest
  * of the API follows.
@@ -275,7 +282,7 @@ export const createStreamToken = asyncHandler(async (req, res) =>
  * a piece of information.
  */
 export const streamBoard = asyncHandler(async (req, res) => {
-  const token = req.query.token;
+  const token = req.get('authorization')?.replace(/^Bearer /i, '') ?? req.query.token;
   if (!token) throw ApiError.unauthorized();
 
   let payload;
@@ -285,13 +292,16 @@ export const streamBoard = asyncHandler(async (req, res) => {
     throw ApiError.unauthorized();
   }
 
-  const user = await User.findById(payload.sub).select('+tokenVersion');
+  if (!mongoose.isValidObjectId(payload.tid)) throw ApiError.unauthorized();
+  const user = await runInTenant(payload.tid, async () => User.findById(payload.sub).select('+tokenVersion'));
   if (!user || !user.isActive || (payload.tv ?? 0) !== (user.tokenVersion ?? 0)) {
     throw ApiError.unauthorized();
   }
   if (!hasPermission(user.role, PERMISSIONS.KITCHEN_VIEW)) {
     throw ApiError.forbidden('Insufficient permissions');
   }
+
+  if (!await Tenant.exists({ _id: payload.tid, isActive: true })) throw ApiError.unauthorized();
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -312,7 +322,7 @@ export const streamBoard = asyncHandler(async (req, res) => {
 
   send({ event: 'connected', at: new Date().toISOString() });
 
-  const unsubscribe = subscribeAll(send);
+  const unsubscribe = subscribeAll(send, payload.tid);
 
   // Comment-only heartbeat. Idle connections are otherwise reaped by proxies
   // and load balancers after ~60s, and the board would silently stop updating
@@ -325,7 +335,10 @@ export const streamBoard = asyncHandler(async (req, res) => {
     }
   }, 25_000);
 
+  const expiry = setTimeout(() => res.end(), Math.max(0, payload.exp * 1000 - Date.now()));
+
   const cleanup = () => {
+    clearTimeout(expiry);
     clearInterval(heartbeat);
     unsubscribe();
   };
@@ -350,6 +363,7 @@ export function announceNewTicket(ticket, order) {
       status: ticket.status,
       nextStatus: NEXT_TICKET_STATUS[ticket.status] ?? null,
       placedAt: ticket.placedAt,
+      expiresAt: ticket.expiresAt ?? nextServiceReset(ticket.placedAt),
       readyAt: null,
       waitingMinutes: 0,
       order: String(order._id),

@@ -13,6 +13,7 @@
  */
 import mongoose from 'mongoose';
 import { requireTenantId } from '../utils/tenantContext.js';
+import { todayIso } from '../utils/date.js';
 
 const counterSchema = new mongoose.Schema(
   {
@@ -25,12 +26,9 @@ const counterSchema = new mongoose.Schema(
 
 const Counter = mongoose.model('Counter', counterSchema);
 
-/** YYYY-MM-DD in the server's local timezone — the service-day boundary. */
+/** Numbering uses India calendar days, independently of kitchen resets. */
 export function serviceDayKey(date = new Date()) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return todayIso(date);
 }
 
 /**

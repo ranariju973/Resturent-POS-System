@@ -71,7 +71,7 @@ console.log('\n--- the limited payload is BUILT, not filtered ---');
 {
   // Split the handler at the early return for the limited scope.
   const limitedStart = dashCode.indexOf("if (scope === 'limited')");
-  const limitedEnd = dashCode.indexOf('const monthStart');
+  const limitedEnd = dashCode.indexOf('const thisMonthStart');
   const limitedBranch = dashCode.slice(limitedStart, limitedEnd);
   const fullBranch = dashCode.slice(limitedEnd);
 
@@ -83,7 +83,7 @@ console.log('\n--- the limited payload is BUILT, not filtered ---');
   // The four cards + recent orders, and nothing beyond them.
   const ALLOWED = [
     'scope', 'todaySalesMinor', 'todaySales', 'todayOrders',
-    'pendingOrders', 'completedOrders', 'recentOrders',
+    'pendingOrders', 'completedOrders', 'recentOrders', 'recentNextCursor', 'recentSince', 'nextResetAt',
   ];
   // Match BOTH `key: value` and ES6 shorthand `key,` — `scope` is written
   // shorthand, and counting only the colon form undercounts the payload.

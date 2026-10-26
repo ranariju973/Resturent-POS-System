@@ -20,7 +20,7 @@ import { AuditLog } from '../models/AuditLog.js';
 import { AUDIT_ACTION, ORDER_STATUS, EXPENSE_CATEGORY_VALUES } from '../constants/enums.js';
 import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { toMajor } from '../utils/money.js';
-import { todayIso, dayStart, dayEnd } from '../utils/date.js';
+import { todayIso, dayStart, dayEnd, monthStart, BUSINESS_TIMEZONE } from '../utils/date.js';
 import { rememberDailyReport, rememberMonthlyReport } from '../utils/statsCache.js';
 
 /** Longest span any range query may cover. */
@@ -97,7 +97,7 @@ async function buildDailyReport(date) {
             { $sort: { totalMinor: -1 } },
           ],
           byHour: [
-            { $group: { _id: { $hour: '$paidAt' }, totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
+            { $group: { _id: { $hour: { date: '$paidAt', timezone: BUSINESS_TIMEZONE } }, totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } },
             { $sort: { _id: 1 } },
           ],
           byType: [{ $group: { _id: '$type', totalMinor: { $sum: '$totalMinor' }, orders: { $sum: 1 } } }],
@@ -179,12 +179,9 @@ export const monthlyReport = asyncHandler(async (req, res) => {
 });
 
 async function buildMonthlyReport(month) {
-  const start = new Date(`${month}-01T00:00:00`);
-  const end = new Date(start);
-  end.setMonth(end.getMonth() + 1);
-
-  const prevStart = new Date(start);
-  prevStart.setMonth(prevStart.getMonth() - 1);
+  const start = monthStart(month);
+  const end = monthStart(month, 1);
+  const prevStart = monthStart(month, -1);
 
   /*
    * Three of these five read the same month of paid orders, so they share one
@@ -201,7 +198,7 @@ async function buildMonthlyReport(month) {
           daily: [
             {
               $group: {
-                _id: { $dayOfMonth: '$paidAt' },
+                _id: { $dayOfMonth: { date: '$paidAt', timezone: BUSINESS_TIMEZONE } },
                 totalMinor: { $sum: '$totalMinor' },
                 orders: { $sum: 1 },
               },
@@ -234,7 +231,7 @@ async function buildMonthlyReport(month) {
   const daily = grouped.daily ?? [];
   const byPayment = grouped.byPayment ?? [];
 
-  const daysInMonth = new Date(end.getTime() - 864e5).getDate();
+  const daysInMonth = Number(todayIso(new Date(end.getTime() - 864e5)).slice(8));
   const netMinor = totals.netMinor ?? 0;
 
   return {
@@ -297,8 +294,8 @@ export const profitAndLoss = asyncHandler(async (req, res) => {
   const profitMinor = netMinor - expensesMinor;
 
   return sendSuccess(res, {
-    from: start.toISOString().slice(0, 10),
-    to: new Date(end.getTime() - 864e5).toISOString().slice(0, 10),
+    from: todayIso(start),
+    to: todayIso(new Date(end.getTime() - 864e5)),
     revenue: {
       grossMinor: revenue.grossMinor ?? 0,
       gross: toMajor(revenue.grossMinor ?? 0),
@@ -353,7 +350,7 @@ export const listExpenses = asyncHandler(async (req, res) => {
   return sendSuccess(res, {
     expenses: expenses.map((e) => ({
       id: String(e._id),
-      date: e.date,
+      date: todayIso(e.date),
       category: e.category,
       description: e.description,
       amountMinor: e.amountMinor,
@@ -371,7 +368,7 @@ export const listExpenses = asyncHandler(async (req, res) => {
 export const createExpense = asyncHandler(async (req, res) => {
   const expense = await Expense.create({
     ...req.body,
-    date: new Date(`${req.body.date}T00:00:00`),
+    date: dayStart(req.body.date),
     createdBy: req.user.id,
   });
 
@@ -390,7 +387,7 @@ export const createExpense = asyncHandler(async (req, res) => {
     {
       expense: {
         id: String(expense._id),
-        date: expense.date,
+        date: todayIso(expense.date),
         category: expense.category,
         description: expense.description,
         amountMinor: expense.amountMinor,
@@ -416,7 +413,7 @@ export const deleteExpense = asyncHandler(async (req, res) => {
   const snapshot = {
     category: expense.category,
     amountMinor: expense.amountMinor,
-    date: expense.date,
+    date: todayIso(expense.date),
     description: expense.description,
   };
 

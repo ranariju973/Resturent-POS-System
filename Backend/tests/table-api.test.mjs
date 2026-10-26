@@ -226,7 +226,7 @@ t('transfer refuses a same-table move',
 t('merge refuses when both tables hold bills',
   /Both tables have open bills/.test(ctl));
 t('merge refuses to build chains',
-  /itself merged into another/.test(ctl));
+  /source\.mergedInto \|\| target\.mergedInto/.test(ctl));
 
 console.log('\n--- destructive actions are guarded ---');
 t('delete refuses with an open order', /Cannot delete a table with an open order/.test(ctl));
@@ -246,7 +246,7 @@ t('delete refuses when past orders reference the table',
 t('the reference check runs BEFORE the row is deleted',
   ctl.indexOf('assertTableUnreferenced') < ctl.indexOf('Table.deleteOne'));
 t('the guard asks the orders collection rather than trusting a flag',
-  /Order\.exists\(\{ table: tableId \}\)/.test(guardSrc));
+  /Order\.exists\(\{ \$or: \[\{ table: tableId \}, \{ tableIds: tableId \}\]/.test(guardSrc));
 t('delete is audited with a snapshot, since the row will be gone',
   /meta: snapshot/.test(ctl));
 t('split persists nothing', !/splitBill[\s\S]{0,900}\.save\(\)/.test(ctl));

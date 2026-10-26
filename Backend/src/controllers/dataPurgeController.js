@@ -11,6 +11,10 @@
  * write, the Cloudinary calls are batched, and the audit entry is one row
  * carrying the count.
  */
+import mongoose from 'mongoose';
+import { withTransaction } from '../utils/transaction.js';
+import { invalidateStats } from '../utils/statsCache.js';
+import { emitEvent, EVENTS } from '../utils/eventBus.js';
 import { MenuItem } from '../models/MenuItem.js';
 import { Category } from '../models/Category.js';
 import { Table } from '../models/Table.js';
@@ -24,7 +28,7 @@ import { Payroll } from '../models/Payroll.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { AUDIT_ACTION } from '../constants/enums.js';
 import { deleteImage } from '../config/cloudinary.js';
-import { sendSuccess, asyncHandler } from '../utils/apiResponse.js';
+import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { invalidateMenu } from '../utils/menuCache.js';
 import { logger } from '../utils/logger.js';
 
@@ -96,16 +100,15 @@ export const purgeMenu = asyncHandler(async (req, res) => {
 
 // ── 2. Table Management ─────────────────────────────────────────────────
 export const purgeTables = asyncHandler(async (req, res) => {
-  const result = await Table.deleteMany({});
-
-  await AuditLog.record(
-    {
-      action: AUDIT_ACTION.DATA_PURGE,
-      resource: 'TableManagement',
-      meta: { tablesDeleted: result.deletedCount },
-    },
-    req,
-  );
+  const result = await withTransaction(async (session) => {
+    if (await Order.exists({ status: 'open', $or: [
+      { table: mongoose.trusted({ $ne: null }) }, { 'tableIds.0': mongoose.trusted({ $exists: true }) },
+    ] }).session(session)) throw ApiError.conflict('Settle or void every table bill before clearing tables');
+    const result = await Table.deleteMany({}, { session });
+    await AuditLog.record({ action: AUDIT_ACTION.DATA_PURGE, resource: 'TableManagement',
+      meta: { tablesDeleted: result.deletedCount } }, req, { session });
+    return result;
+  }, { required: true });
 
   return sendSuccess(res, {
     purged: true,
@@ -156,47 +159,31 @@ export const purgeCustomers = asyncHandler(async (req, res) => {
 
 // ── 5. Reports Section ──────────────────────────────────────────────────
 export const purgeReports = asyncHandler(async (req, res) => {
-  const [orderResult, expenseResult, attendanceResult, payrollResult] =
-    await Promise.all([
-      Order.deleteMany({}),
-      Expense.deleteMany({}),
-      Attendance.deleteMany({}),
-      Payroll.deleteMany({}),
-    ]);
-
-  // Counter uses a composite _id like 'order:<tenantId>:2026-08-04'.
-  // It is NOT tenant-scoped via the plugin, so we match by regex.
-  const tenantId = String(req.tenantId);
-  const counterResult = await Counter.collection.deleteMany({
-    _id: new RegExp(`:${tenantId}(:|$)`),
-  });
-
-  await AuditLog.record(
-    {
-      action: AUDIT_ACTION.DATA_PURGE,
-      resource: 'ReportsSection',
-      meta: {
-        ordersDeleted: orderResult.deletedCount,
-        expensesDeleted: expenseResult.deletedCount,
-        attendanceDeleted: attendanceResult.deletedCount,
-        payrollDeleted: payrollResult.deletedCount,
-        countersDeleted: counterResult.deletedCount,
-      },
-    },
-    req,
-  );
-
-  return sendSuccess(res, {
-    purged: true,
-    category: 'reports',
-    counts: {
-      orders: orderResult.deletedCount,
-      expenses: expenseResult.deletedCount,
-      attendance: attendanceResult.deletedCount,
-      payroll: payrollResult.deletedCount,
-      counters: counterResult.deletedCount,
-    },
-  });
+  const counts = await withTransaction(async (session) => {
+    // Financial deletion must remove its kitchen references and release unpaid groups together.
+    const orders = await Order.deleteMany({}, { session });
+    const tickets = await Ticket.deleteMany({}, { session });
+    await Table.updateMany({ currentOrder: mongoose.trusted({ $ne: null }) }, { $set: {
+      currentOrder: null, mergedInto: null, status: 'available', occupiedAt: null,
+    } }, { session });
+    const expenses = await Expense.deleteMany({}, { session });
+    const attendance = await Attendance.deleteMany({}, { session });
+    const payroll = await Payroll.deleteMany({}, { session });
+    // Counter has a tenant-bearing composite key rather than the scope plugin.
+    const tenantId = String(req.tenantId);
+    const counters = await Counter.collection.deleteMany({
+      _id: new RegExp(`:${tenantId}(:|$)`),
+    }, { session });
+    const counts = { orders: orders.deletedCount, tickets: tickets.deletedCount,
+      expenses: expenses.deletedCount, attendance: attendance.deletedCount,
+      payroll: payroll.deletedCount, counters: counters.deletedCount };
+    await AuditLog.record({ action: AUDIT_ACTION.DATA_PURGE, resource: 'ReportsSection',
+      meta: counts }, req, { session });
+    return counts;
+  }, { required: true });
+  await invalidateStats();
+  emitEvent(EVENTS.ORDER_VOIDED, { reason: 'reports-cleared' });
+  return sendSuccess(res, { purged: true, category: 'reports', counts });
 });
 
 export default { purgeMenu, purgeTables, purgeKitchen, purgeCustomers, purgeReports };

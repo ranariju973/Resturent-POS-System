@@ -11,12 +11,18 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAnyPermission } from '../middleware/rbac.js';
 import { validate } from '../middleware/validate.js';
 import { PERMISSIONS } from '../constants/permissions.js';
-import { dashboardSchema } from '../validators/reports.js';
-import { getDashboard } from '../controllers/dashboardController.js';
+import { dashboardSchema, recentOrdersSchema } from '../validators/reports.js';
+import { getDashboard, getRecentOrders } from '../controllers/dashboardController.js';
 
 const router = Router();
 
 router.use(requireAuth());
+
+router.get('/recent-orders',
+  requireAnyPermission([PERMISSIONS.DASHBOARD_VIEW_FULL, PERMISSIONS.DASHBOARD_VIEW_LIMITED]),
+  validate({ query: recentOrdersSchema }),
+  getRecentOrders,
+);
 
 router.get(
   '/',

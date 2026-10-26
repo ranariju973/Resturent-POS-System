@@ -24,6 +24,7 @@ import { AUDIT_ACTION, ROLES } from '../constants/enums.js';
 import { env } from '../config/env.js';
 import { publicUser } from '../utils/publicUser.js';
 import { runUnscoped, runInTenant, getTenantId } from '../utils/tenantContext.js';
+import { withTransaction } from '../utils/transaction.js';
 import {
   signAccessToken,
   signRefreshToken,
@@ -128,7 +129,7 @@ async function burnTiming(candidate) {
  * @param {import('express').Request} req
  * @param {any} [family] existing family id when rotating; a new one on login
  */
-export async function issueSession(res, user, req, family) {
+export async function issueSession(res, user, req, family, { session = null, deferCookie = false } = {}) {
   const sessionFamily = family ?? new mongoose.Types.ObjectId();
 
   const accessToken = signAccessToken({
@@ -158,11 +159,11 @@ export async function issueSession(res, user, req, family) {
     expiresAt: refresh.expiresAt,
     ip: req.ip,
     userAgent: req.get('user-agent') ?? '',
-  });
+  }, { session });
 
-  res.cookie(REFRESH_COOKIE, refresh.token, refreshCookieOptions(refresh.expiresAt));
+  if (!deferCookie) res.cookie(REFRESH_COOKIE, refresh.token, refreshCookieOptions(refresh.expiresAt));
 
-  return { accessToken, jti: refresh.jti, family: sessionFamily };
+  return { accessToken, jti: refresh.jti, family: sessionFamily, refresh };
 }
 
 /**
@@ -938,13 +939,25 @@ export const refresh = asyncHandler(async (req, res) => {
     throw ApiError.unauthorized();
   }
 
-  // Rotate: issue the replacement inside the same family, then retire this one.
-  const { accessToken, jti } = await issueSession(res, user, req, stored.family);
-
-  stored.revokedAt = new Date();
-  stored.revokedReason = 'rotated';
-  stored.replacedBy = jti;
-  await stored.save();
+  // Retire and replace atomically. Two callers must never both consume one token.
+  const rotated = await withTransaction(async (session) => {
+    const claimed = await RefreshToken.findOneAndUpdate({ _id: stored._id, revokedAt: null },
+      { $set: { revokedAt: new Date(), revokedReason: 'rotated' } }, { session, new: true });
+    if (!claimed) return null;
+    const issued = await issueSession(res, user, req, stored.family, { session, deferCookie: true });
+    await RefreshToken.updateOne({ _id: stored._id }, { $set: { replacedBy: issued.jti } }, { session });
+    return issued;
+  }, { required: true });
+  if (!rotated) {
+    await RefreshToken.revokeFamily(stored.family, 'reuse-detected');
+    res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
+    await AuditLog.record({ actor: stored.user, action: AUDIT_ACTION.LOGIN_FAILURE,
+      resource: 'RefreshToken', resourceId: stored._id,
+      meta: { reason: 'refresh-token-reuse', family: String(stored.family) } }, req);
+    throw ApiError.unauthorized();
+  }
+  const { accessToken } = rotated;
+  res.cookie(REFRESH_COOKIE, rotated.refresh.token, refreshCookieOptions(rotated.refresh.expiresAt));
 
   return sendSuccess(res, { accessToken, user: publicUser(user) });
 });

@@ -144,8 +144,12 @@ export const discountSchema = z
 
 export const createOrderSchema = z
   .object({
-    type: z.enum(ORDER_TYPE_VALUES, { errorMap: () => ({ message: 'Invalid order type' }) }),
+    type: z.enum(ORDER_TYPE_VALUES, { error: 'Invalid order type' }),
     tableId: objectId.optional(),
+    tableIds: z.array(objectId).min(1).max(50)
+      .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, 'Select each table once')
+      .optional(),
+    clientRequestId: z.string().uuid().optional(),
     customerId: objectId.optional(),
     customer: inlineCustomer.optional(),
     items,
@@ -173,24 +177,28 @@ export const createOrderSchema = z
   })
   // A dine-in order without a table has nowhere to be served; a takeaway with
   // one blocks a table that nobody is sitting at.
-  .refine((body) => body.type !== 'dine-in' || Boolean(body.tableId), {
+  .refine((body) => !(body.tableId && body.tableIds), {
+    message: 'Send either tableId or tableIds, not both', path: ['tableIds'],
+  })
+  .refine((body) => body.type !== 'dine-in' || Boolean(body.tableId || body.tableIds?.length), {
     message: 'A dine-in order needs a table',
     path: ['tableId'],
   })
-  .refine((body) => body.type === 'dine-in' || !body.tableId, {
+  .refine((body) => body.type === 'dine-in' || !(body.tableId || body.tableIds), {
     message: 'Only dine-in orders may be attached to a table',
     path: ['tableId'],
   });
 
 /** Replace the lines on an open order — the cart being edited. */
-export const updateItemsSchema = z.object({ items }).strict();
+export const updateItemsSchema = z.object({ items, version: z.number().int().min(0).optional() }).strict();
 
 /** Settle the bill. */
 export const paySchema = z
   .object({
     paymentMethod: z.enum(PAYMENT_METHOD_VALUES, {
-      errorMap: () => ({ message: 'Invalid payment method' }),
+      error: 'Invalid payment method',
     }),
+    version: z.number().int().min(0).optional(),
     customerId: objectId.optional(),
   })
   .strict();
@@ -204,6 +212,7 @@ export const paySchema = z
  */
 export const voidSchema = z
   .object({
+    version: z.number().int().min(0).optional(),
     reason: z
       .string()
       .trim()

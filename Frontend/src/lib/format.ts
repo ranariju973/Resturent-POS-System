@@ -29,12 +29,9 @@ export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' :
 export const duration = (mins: number) =>
   mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
 
-export const clockTime = (ms: number) => {
-  const d = new Date(ms);
-  const ap = d.getHours() >= 12 ? 'PM' : 'AM';
-  const h = d.getHours() % 12 || 12;
-  return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`;
-};
+export const clockTime = (ms: number) => new Date(ms).toLocaleTimeString('en-IN', {
+  timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
+});
 
 export const minutesSince = (from: number | null) =>
   from ? Math.max(0, Math.round((Date.now() - from) / 60000)) : 0;

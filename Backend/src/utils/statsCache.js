@@ -29,7 +29,7 @@
  * the warning in cache.js about unbounded keys.
  */
 import { key, remember, delPrefix } from './cache.js';
-import { todayIso } from './date.js';
+import { todayIso, serviceWindow } from './date.js';
 
 /** A screen someone is watching while money moves. Kept deliberately short. */
 const LIVE_TTL_MS = 30_000;
@@ -51,7 +51,7 @@ const statsPrefix = () => key('stats');
  * sees the cashier's narrower one.
  */
 export const rememberDashboard = (role, compute) =>
-  remember(key('stats', 'dashboard', role), LIVE_TTL_MS, compute);
+  remember(key('stats', 'dashboard', role, todayIso(), serviceWindow().serviceStart.toISOString()), LIVE_TTL_MS, compute);
 
 export const rememberDailyReport = (date, compute) =>
   remember(

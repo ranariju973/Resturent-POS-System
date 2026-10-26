@@ -26,7 +26,14 @@ export interface RecentOrder {
   createdAt: string;
 }
 
-export interface DashboardData {
+export interface RecentOrdersPage {
+  recentOrders: RecentOrder[];
+  recentNextCursor: string | null;
+  recentSince: string;
+  nextResetAt: string;
+}
+
+export interface DashboardData extends RecentOrdersPage {
   scope: 'full' | 'limited';
 
   todaySales: number;
@@ -50,4 +57,8 @@ export interface DashboardData {
 
 export async function getDashboard(signal?: AbortSignal): Promise<DashboardData> {
   return api<DashboardData>('/api/dashboard', { signal });
+}
+
+export function getRecentOrders(cursor: string): Promise<RecentOrdersPage> {
+  return api<RecentOrdersPage>(`/api/dashboard/recent-orders?cursor=${encodeURIComponent(cursor)}`);
 }

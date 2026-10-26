@@ -275,12 +275,12 @@ t('sold-out items block the order', /Sold out:/.test(code));
 console.log('\n--- atomicity ---');
 t('order creation runs in a transaction', /createOrder[\s\S]{0,3000}withTransaction/.test(code));
 t('the ticket is created in the same transaction',
-  /withTransaction[\s\S]{0,2000}new Ticket\([\s\S]{0,300}save\(\{ session \}\)/.test(code));
+  /withTransaction[\s\S]{0,6000}new Ticket\([\s\S]{0,300}save\(\{ session \}\)/.test(code));
 t('the table claim is atomic', /findOneAndUpdate\([\s\S]{0,200}currentOrder: null/.test(code));
 t('a lost table claim aborts the whole order',
-  /was just billed by someone else/.test(ctl));
+  /was just billed by another terminal/.test(ctl));
 t('payment frees the table in the same transaction',
-  /payOrder[\s\S]{0,1500}withTransaction[\s\S]{0,900}Table\.updateOne/.test(code));
+  /payOrder[\s\S]{0,500}withTransaction[\s\S]{0,2500}detachOrderTables\(order, session\)/.test(code));
 // The audit row for an inline customer is written inside createOrder's
 // transaction. Without the session it commits on its own, so a later abort
 // (a lost table claim) leaves a record of creating someone who does not exist.
@@ -292,7 +292,7 @@ t('AuditLog.record accepts a session', /record\(entry, req, options = \{\}\)/.te
 console.log('\n--- the bill opens in one round trip ---');
 // Opening a bill used to cost four requests: create, then PATCH the discount,
 // then GET /tables and GET /tables/zones to learn the table was now seated.
-t('the seated table comes back with the order', /table: result\.table \? publicTable/.test(code));
+t('the seated table comes back with the order', /table: result\.tables\[0\] \? publicTable/.test(code));
 t('createOrder accepts an opening discount',
   /discount: discountSchema\.optional\(\)/.test(
     fs.readFileSync(path.join(ROOT, 'src/validators/orders.js'), 'utf8')));
@@ -387,7 +387,7 @@ console.log('\n--- the inline customer is keyed by phone ---');
   t('the inline customer is strict — no smuggling extra fields', !extra.success);
 }
 
-const inlineBody = ctl.slice(ctl.indexOf('async function resolveInlineCustomer'), ctl.indexOf('/** Human label for the kitchen board'));
+const inlineBody = ctl.slice(ctl.indexOf('async function resolveInlineCustomer'), ctl.indexOf('/** A retry must'));
 t('identity is the normalised phone, not the name', /normalizePhone\(inline\.phone\)/.test(inlineBody));
 t('a stored name is never overwritten by what was typed at the till',
   !/existing\.name = name;[\s\S]{0,40}await existing\.save/.test(inlineBody) ||
@@ -395,7 +395,7 @@ t('a stored name is never overwritten by what was typed at the till',
 t('an unknown number with no name is refused rather than filed as a guest',
   /if \(!name\)[\s\S]{0,120}badRequest/.test(inlineBody));
 t('the customer is resolved inside the order transaction',
-  /withTransaction[\s\S]{0,600}resolveInlineCustomer/.test(ctl));
+  /withTransaction[\s\S]{0,2500}resolveInlineCustomer/.test(ctl));
 t('visit counters go through the model, not open-coded in the controller',
   /Customer\.recordVisit/.test(ctl) && !/\$inc: \{ visitCount/.test(ctl));
 
@@ -421,7 +421,7 @@ t('the snapshot carries the line items, not just a total',
 t('the ticket is removed in the same transaction',
   /withTransaction[\s\S]{0,400}Ticket\.deleteMany/.test(delBody));
 t('the table is freed only if it still points at this order',
-  /currentOrder: order\._id[\s\S]{0,200}TABLE_STATUS\.AVAILABLE/.test(delBody));
+  /detachOrderTables\(order, session, order.status === ORDER_STATUS.OPEN\)/.test(delBody) && /Table.updateMany\(\{ currentOrder: order\._id \}/.test(fs.readFileSync(path.join(ROOT, 'src/utils/orderTables.js'), 'utf8')));
 t('the audit entry is written after the commit, not before',
   delBody.indexOf('withTransaction') < delBody.indexOf('AUDIT_ACTION.ORDER_DELETE'));
 t('the deletion is logged at warn level for alerting',

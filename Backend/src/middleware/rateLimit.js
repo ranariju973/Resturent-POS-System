@@ -1,3 +1,4 @@
+import { safeRequestPath } from '../utils/logRedaction.js';
 /**
  * Rate limiters.
  *
@@ -67,7 +68,7 @@ function limitHandler(req, _res, next, options) {
   logger.warn('Rate limit exceeded', {
     requestId: req.id,
     ip: req.ip,
-    path: req.originalUrl,
+    path: safeRequestPath(req),
     limit: options.max,
   });
   next(ApiError.tooManyRequests('Too many requests — please slow down'));

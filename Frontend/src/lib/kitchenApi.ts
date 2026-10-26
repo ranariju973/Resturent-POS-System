@@ -8,11 +8,8 @@
  * there is one.
  *
  * ── Live updates need a separate token ─────────────────────────────────────
- * EventSource cannot send an Authorization header, so the stream is opened
- * with a short-lived token minted by `/stream-token` and passed in the query
- * string. That token is deliberately not the access token: query strings end
- * up in proxy logs and browser history, and a 60-second stream ticket leaking
- * there is a far smaller problem than a 15-minute access token doing so.
+ * A short-lived stream credential is sent in an Authorization header using
+ * fetch streaming. It is renewed before expiry and never put in a request URL.
  */
 import { api, BASE_URL } from './api';
 import type { TicketDto } from './dto';
@@ -25,6 +22,7 @@ export interface BoardResult {
   columns: Board;
   counts: Record<TicketStatus, number>;
   servedWithinMinutes: number;
+  nextResetAt: string;
 }
 
 export async function getBoard(
@@ -42,13 +40,14 @@ export async function getBoard(
     columns: Record<TicketStatus, TicketDto[]>;
     counts: Record<TicketStatus, number>;
     servedWithinMinutes: number;
+    nextResetAt: string;
   }>(`/api/kitchen/board${suffix}`, { signal });
 
   const columns = Object.fromEntries(
     Object.entries(data.columns).map(([status, tickets]) => [status, tickets.map(toTicket)]),
   ) as Board;
 
-  return { columns, counts: data.counts, servedWithinMinutes: data.servedWithinMinutes };
+  return { columns, counts: data.counts, servedWithinMinutes: data.servedWithinMinutes, nextResetAt: data.nextResetAt };
 }
 
 /**
@@ -73,9 +72,9 @@ export async function recallTicket(id: string): Promise<Ticket> {
   return toTicket(data.ticket);
 }
 
-export async function createStreamToken(): Promise<{ token: string; expiresInSeconds: number }> {
+export async function createStreamToken(signal?: AbortSignal): Promise<{ token: string; expiresInSeconds: number }> {
   return api<{ token: string; expiresInSeconds: number }>('/api/kitchen/stream-token', {
-    method: 'POST',
+    method: 'POST', signal,
   });
 }
 
@@ -83,21 +82,72 @@ export async function createStreamToken(): Promise<{ token: string; expiresInSec
  * Open the live board stream.
  *
  * Returns a cleanup function. The caller is responsible for calling it — an
- * EventSource left open survives the component that made it and will keep
+ * stream left open survives the component that made it and will keep
  * reconnecting after the screen is gone.
  */
-export async function openBoardStream(onChange: () => void): Promise<() => void> {
-  const { token } = await createStreamToken();
-  // Same base as every other call: with VITE_API_URL set, a relative URL
-  // here would point the stream at the frontend origin instead of the API.
-  const source = new EventSource(
-    `${BASE_URL}/api/kitchen/stream?token=${encodeURIComponent(token)}`,
-  );
-
-  // Any server-sent event means the board moved; refetching is cheaper to get
-  // right than patching local state from a partial event payload.
-  source.onmessage = () => onChange();
-  source.addEventListener('ticket', () => onChange());
-
-  return () => source.close();
+export async function openBoardStream(onChange: () => void, onConnection: (connected: boolean) => void = () => {}): Promise<() => void> {
+  let stopped = false;
+  let attempt = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let renewal: ReturnType<typeof setTimeout> | undefined;
+  let changeTimer: ReturnType<typeof setTimeout> | undefined;
+  let controller: AbortController | undefined;
+  const changed = () => {
+    if (changeTimer) return;
+    changeTimer = setTimeout(() => { changeTimer = undefined; if (!stopped) onChange(); }, 150);
+  };
+  const connect = async () => {
+    if (stopped || document.hidden || controller) return;
+    const current = new AbortController();
+    controller = current;
+    let renew = false;
+    try {
+      const { token, expiresInSeconds } = await createStreamToken(current.signal);
+      if (stopped || current.signal.aborted) return;
+      // Fetch streaming keeps even the short-lived credential out of proxy URL logs.
+      const response = await fetch(`${BASE_URL}/api/kitchen/stream`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+        signal: current.signal, credentials: 'include',
+      });
+      if (!response.ok || !response.body) throw new Error('Kitchen stream unavailable');
+      attempt = 0;
+      onConnection(true);
+      changed();
+      renewal = setTimeout(() => { renew = true; current.abort(); }, Math.max(1000, (expiresInSeconds - 5) * 1000));
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      while (!stopped) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        const frames = pending.split('\n\n');
+        pending = frames.pop() ?? '';
+        for (const frame of frames) if (frame.startsWith('data:')) changed();
+        if (pending.length > 1_000_000) throw new Error('Kitchen event exceeded size limit');
+      }
+    } catch { /* Polling remains available while the connection recovers. */ }
+    finally {
+      clearTimeout(renewal);
+      current.abort();
+      controller = undefined;
+      onConnection(false);
+      if (!stopped && !document.hidden) {
+        timer = setTimeout(() => void connect(), renew ? 0 : Math.min(30_000, 1000 * 2 ** attempt++));
+      }
+    }
+  };
+  const visibility = () => {
+    clearTimeout(timer);
+    if (document.hidden) controller?.abort();
+    else { changed(); if (!controller) void connect(); }
+  };
+  document.addEventListener('visibilitychange', visibility);
+  void connect();
+  return () => {
+    stopped = true;
+    clearTimeout(timer); clearTimeout(renewal); clearTimeout(changeTimer);
+    controller?.abort();
+    document.removeEventListener('visibilitychange', visibility);
+  };
 }

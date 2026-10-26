@@ -15,7 +15,7 @@ import { z } from 'zod';
  * exists to answer authoritatively.
  */
 const terminalName = z
-  .string({ required_error: 'Terminal name is required' })
+  .string({ error: 'Terminal name is required' })
   .trim()
   .min(2, 'Terminal name must be at least 2 characters')
   .max(60, 'Terminal name cannot exceed 60 characters');

@@ -16,7 +16,7 @@ import { z } from 'zod';
 export const createTenantSchema = z
   .object({
     name: z
-      .string({ required_error: 'Restaurant name is required' })
+      .string({ error: 'Restaurant name is required' })
       .trim()
       .min(2, 'Restaurant name must be at least 2 characters')
       .max(80, 'Restaurant name cannot exceed 80 characters'),

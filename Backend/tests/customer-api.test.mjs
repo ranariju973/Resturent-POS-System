@@ -158,7 +158,8 @@ console.log('\n--- PII never reaches log storage (real logger format) ---');
     path.resolve(import.meta.dirname, '../src/utils/logger.js'),
     'utf8',
   );
-  const keysBlock = src.slice(src.indexOf('SENSITIVE_KEYS'), src.indexOf(']);'));
+  const keysStart = src.indexOf('const SENSITIVE_KEYS');
+  const keysBlock = src.slice(keysStart, src.indexOf(']);', keysStart));
 
   t("'phone' is on the redaction list", /'phone'/.test(keysBlock));
   t("'email' is on the redaction list", /'email'/.test(keysBlock));

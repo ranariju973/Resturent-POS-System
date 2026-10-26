@@ -40,19 +40,8 @@ import { ApiError, sendSuccess, asyncHandler } from '../utils/apiResponse.js';
 import { toMajor } from '../utils/money.js';
 import { rememberDashboard } from '../utils/statsCache.js';
 
-/** Local midnight — the service day as staff experience it, not UTC. */
-function startOfToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-const startOfMonth = (offset = 0) => {
-  const d = new Date();
-  d.setMonth(d.getMonth() + offset, 1);
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
+import { todayIso, dayStart, monthStart, serviceWindow } from '../utils/date.js';
+import { liveTicketFilter } from '../utils/ticketExpiry.js';
 
 /** Paid takings and order count over a window. */
 async function takings(since, until) {
@@ -67,24 +56,45 @@ async function takings(since, until) {
   return { salesMinor: row?.salesMinor ?? 0, orders: row?.orders ?? 0 };
 }
 
-/** The recent-orders table. Same for both roles — it is today's own work. */
-async function recentOrders(since, limit = 10) {
-  const orders = await Order.find({ createdAt: mongoose.trusted({ $gte: since }) })
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .select('orderNo type status totalMinor createdAt items');
-
-  return orders.map((o) => ({
-    id: String(o._id),
-    orderNo: o.orderNo,
-    type: o.type,
-    status: o.status,
-    totalMinor: o.totalMinor,
-    total: toMajor(o.totalMinor),
-    itemCount: o.items.reduce((sum, l) => sum + l.qty, 0),
-    createdAt: o.createdAt,
-  }));
+/** Stable descending pagination; the server always controls the allowed window. */
+export async function recentOrders(cursor, now = new Date()) {
+  const { recentSince, nextResetAt } = serviceWindow(now);
+  const filter = { createdAt: mongoose.trusted({ $gte: recentSince, $lte: now }) };
+  if (cursor) {
+    const [time, id, window] = cursor.split('_');
+    if (Number(window) !== recentSince.getTime()) {
+      throw ApiError.conflict('The service day changed. Refresh recent orders.');
+    }
+    const at = new Date(Number(time));
+    if (!Number.isFinite(at.getTime()) || at < recentSince || at > now) {
+      throw ApiError.badRequest('Invalid recent-orders cursor');
+    }
+    filter.$or = [
+      { createdAt: mongoose.trusted({ $lt: at }) },
+      { createdAt: at, _id: mongoose.trusted({ $lt: new mongoose.Types.ObjectId(id) }) },
+    ];
+  }
+  const found = await Order.find(filter)
+    .sort({ createdAt: -1, _id: -1 }).limit(51)
+    .select('orderNo type status totalMinor createdAt items.qty').lean();
+  const rows = found.slice(0, 50);
+  const last = rows.at(-1);
+  return {
+    recentOrders: rows.map((o) => ({
+      id: String(o._id), orderNo: o.orderNo, type: o.type, status: o.status,
+      totalMinor: o.totalMinor, total: toMajor(o.totalMinor),
+      itemCount: o.items.reduce((sum, l) => sum + l.qty, 0), createdAt: o.createdAt,
+    })),
+    recentNextCursor: found.length > 50
+      ? `${last.createdAt.getTime()}_${last._id}_${recentSince.getTime()}` : null,
+    recentSince,
+    nextResetAt,
+  };
 }
+
+export const getRecentOrders = asyncHandler(async (req, res) => {
+  return sendSuccess(res, await recentOrders(req.query.cursor));
+});
 
 // ---------------------------------------------------------------------------
 // GET /api/dashboard
@@ -106,20 +116,25 @@ export const getDashboard = asyncHandler(async (req, res) => {
    * lags a sale by half a minute is acceptable where one that lags by five is
    * not. See utils/statsCache.js for why there is no invalidate-on-payment.
    */
-  return sendSuccess(res, await rememberDashboard(scope, () => buildDashboard(scope)));
+  let data = await rememberDashboard(scope, () => buildDashboard(scope));
+  if (new Date(data.nextResetAt).getTime() <= Date.now()) {
+    data = await rememberDashboard(scope, () => buildDashboard(scope));
+  }
+  return sendSuccess(res, data);
 });
 
 async function buildDashboard(scope) {
-  const since = startOfToday();
+  const now = new Date();
+  const since = dayStart(todayIso(now));
+  const live = liveTicketFilter(now);
 
   const [today, pending, completed, recent] = await Promise.all([
     takings(since),
-    Ticket.countDocuments({ status: TICKET_STATUS.PENDING }),
+    Ticket.countDocuments({ ...live, status: TICKET_STATUS.PENDING }),
     Ticket.countDocuments({
-      status: TICKET_STATUS.SERVED,
-      updatedAt: mongoose.trusted({ $gte: since }),
+      ...live, status: TICKET_STATUS.SERVED,
     }),
-    recentOrders(since),
+    recentOrders(undefined, now),
   ]);
 
   // --- The limited payload, built from scratch ------------------------------
@@ -131,23 +146,26 @@ async function buildDashboard(scope) {
       todayOrders: today.orders,
       pendingOrders: pending,
       completedOrders: completed,
-      recentOrders: recent,
+      recentOrders: recent.recentOrders,
+      recentNextCursor: recent.recentNextCursor,
+      recentSince: recent.recentSince,
+      nextResetAt: recent.nextResetAt,
     };
   }
 
   // --- The full payload -----------------------------------------------------
-  const monthStart = startOfMonth(0);
-  const prevMonthStart = startOfMonth(-1);
+  const thisMonthStart = monthStart(todayIso(now).slice(0, 7));
+  const prevMonthStart = monthStart(todayIso(now).slice(0, 7), -1);
 
   const [thisMonth, prevMonth, expenseRow, topItems] = await Promise.all([
-    takings(monthStart),
-    takings(prevMonthStart, monthStart),
+    takings(thisMonthStart),
+    takings(prevMonthStart, thisMonthStart),
     Expense.aggregate([
-      { $match: { isActive: true, date: mongoose.trusted({ $gte: monthStart }) } },
+      { $match: { isActive: true, date: mongoose.trusted({ $gte: thisMonthStart }) } },
       { $group: { _id: null, totalMinor: { $sum: '$amountMinor' } } },
     ]).then(([r]) => r?.totalMinor ?? 0),
     Order.aggregate([
-      { $match: { status: ORDER_STATUS.PAID, paidAt: mongoose.trusted({ $gte: monthStart }) } },
+      { $match: { status: ORDER_STATUS.PAID, paidAt: mongoose.trusted({ $gte: thisMonthStart }) } },
       { $unwind: '$items' },
       {
         $group: {
@@ -171,7 +189,7 @@ async function buildDashboard(scope) {
     todayOrders: today.orders,
     pendingOrders: pending,
     completedOrders: completed,
-    recentOrders: recent,
+    ...recent,
 
     // Admin-only from here down.
     monthSalesMinor: grossMinor,

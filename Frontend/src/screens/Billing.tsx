@@ -13,6 +13,8 @@ import {
   LoadState,
   PageHeading,
   SearchInput,
+  ModalOverlay,
+  ModalTitle,
 } from '../components/ui';
 
 /** Shared styling for the two customer inputs. */
@@ -89,13 +91,15 @@ export function Billing() {
   const lines = useMemo(
     () =>
       state.cart.flatMap((line) => {
-        const item = itemById.get(line.id);
+        const saved = state.activeOrder?.items.find((item) => item.menuItem === line.id);
+        const item = saved ? { name: saved.name, price: saved.unitPrice } : itemById.get(line.id);
         return item ? [{ line, item, lineTotal: item.price * line.qty }] : [];
       }),
-    [state.cart, itemById],
+    [state.cart, state.activeOrder, itemById],
   );
 
   const open = state.activeOrder;
+  const draftLocked = Boolean(open || state.checkoutPending || state.creationUncertain);
 
   // Before the bill is opened these are a local estimate so the cashier can see
   // the effect of a discount. Once it exists, every figure is the server's —
@@ -177,7 +181,7 @@ export function Billing() {
     : state.cart.length > 0
       ? 'Open the bill first — the kitchen ticket is created with it'
       : 'Add items first';
-  const tableName = state.tables.find((t) => t.id === state.orderTable)?.name ?? '';
+  const tableName = open?.tableNames?.join(' + ') || state.tables.filter((t) => state.orderTables.includes(t.id)).map((t) => t.name).join(' + ');
 
   return (
     <main
@@ -263,6 +267,7 @@ export function Billing() {
                   key={p.id}
                   type="button"
                   className="press hv-green-border"
+                  disabled={draftLocked}
                   onClick={() => actions.addToCart(p.id)}
                   style={{
                     position: 'relative',
@@ -518,13 +523,15 @@ export function Billing() {
             borderBottom: '1px solid #edebe9',
           }}
         >
+          {open ? <p style={{ margin: 0, fontSize: 12 }}>Bill opened. Settle or void this bill before starting another.</p> : null}
           <div style={{ display: 'flex', gap: 6 }}>
             {ORDER_TYPES.map((type) => (
               <button
                 key={type.id}
                 type="button"
                 className="press"
-                onClick={() => actions.setOrderType(type.id)}
+                disabled={draftLocked}
+                  onClick={() => actions.setOrderType(type.id)}
                 style={{
                   flex: 1,
                   padding: '8px 0',
@@ -551,7 +558,8 @@ export function Billing() {
             <button
               type="button"
               className="press"
-              onClick={actions.openTablePicker}
+              disabled={draftLocked}
+                  onClick={actions.openTablePicker}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -570,7 +578,7 @@ export function Billing() {
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <Icon icon="lucide:utensils" size={14} />
-                {tableName ? `Table ${tableName}` : 'Choose a table'}
+                {tableName ? `Table ${tableName}` : 'Choose tables'}
               </span>
               <Icon icon="lucide:chevron-right" size={15} />
             </button>
@@ -606,6 +614,7 @@ export function Billing() {
                   // digits otherwise. Read-only while masked: the bullets are
                   // not a number, so editing them produces nonsense the server
                   // would reject anyway. Clearing is the way back.
+                  disabled={draftLocked}
                   value={state.customerPhoneMasked || state.customerPhone}
                   readOnly={phonePicked}
                   onChange={(e) => actions.setCustomerPhone(e.target.value)}
@@ -628,6 +637,7 @@ export function Billing() {
                   type="button"
                   className="press"
                   title="Detach this customer"
+                  disabled={draftLocked}
                   onClick={actions.clearPickedCustomer}
                   style={{
                     position: 'absolute',
@@ -719,6 +729,7 @@ export function Billing() {
                 <input
                   type="text"
                   placeholder={phoneStarted ? 'Aarav Mehta' : 'Walk-in — leave blank'}
+                  disabled={draftLocked}
                   value={state.customer}
                   onChange={(e) => actions.setCustomerName(e.target.value)}
                   style={compactInput}
@@ -794,7 +805,8 @@ export function Billing() {
                     type="button"
                     className="press hv-danger"
                     title="Remove item"
-                    onClick={() => actions.removeLine(line.id)}
+                    disabled={draftLocked}
+                  onClick={() => actions.removeLine(line.id)}
                     style={{
                       width: 28,
                       height: 28,
@@ -824,7 +836,8 @@ export function Billing() {
                   <button
                     type="button"
                     className="press hv-green"
-                    onClick={() => actions.bumpQty(line.id, -1)}
+                    disabled={draftLocked}
+                  onClick={() => actions.bumpQty(line.id, -1)}
                     style={{ ...stepperButton, ...(isMobile ? stepperTouch : null) }}
                   >
                     −
@@ -837,7 +850,8 @@ export function Billing() {
                   <button
                     type="button"
                     className="press"
-                    onClick={() => actions.bumpQty(line.id, 1)}
+                    disabled={draftLocked}
+                  onClick={() => actions.bumpQty(line.id, 1)}
                     style={{
                       ...stepperButton,
                       ...(isMobile ? stepperTouch : null),
@@ -852,6 +866,7 @@ export function Billing() {
                 <button
                   type="button"
                   className="press hv-green"
+                  disabled={draftLocked}
                   onClick={() => actions.patchLine(line.id, { noteOpen: !line.noteOpen })}
                   style={{
                     display: 'flex',
@@ -877,6 +892,7 @@ export function Billing() {
                   className="focus-green"
                   placeholder="Kitchen note — e.g. no onions"
                   value={line.note}
+                  disabled={draftLocked}
                   onChange={(e) => actions.patchLine(line.id, { note: e.target.value })}
                   style={{
                     width: '100%',
@@ -990,7 +1006,8 @@ export function Billing() {
               </span>
               <input
                 type="text"
-                value={state.discountValue}
+                disabled={draftLocked}
+                  value={state.discountValue}
                 onChange={(e) => actions.patch({ discountValue: e.target.value })}
                 style={{
                   flex: 1,
@@ -1029,12 +1046,12 @@ export function Billing() {
               <DiscountMode
                 label={CURRENCY}
                 active={state.discountMode === 'flat'}
-                onClick={() => actions.patch({ discountMode: 'flat' })}
+                onClick={() => { if (!draftLocked) actions.patch({ discountMode: 'flat' }); }}
               />
               <DiscountMode
                 label="%"
                 active={state.discountMode === 'pct'}
-                onClick={() => actions.patch({ discountMode: 'pct' })}
+                onClick={() => { if (!draftLocked) actions.patch({ discountMode: 'pct' }); }}
               />
             </div>
           </div>
@@ -1382,6 +1399,16 @@ export function Billing() {
       </aside>
 
       {state.tablePickerOpen ? <TableSelectOverlay /> : null}
+      {state.creationUncertain ? (
+        <ModalOverlay maxWidth={440}>
+          <ModalTitle>Confirm the submitted bill</ModalTitle>
+          <p>The connection was interrupted. Retry this submission to recover the same bill before starting another.</p>
+          <button type="button" disabled={state.checkoutPending} onClick={() => void actions.generateBill()}
+            style={{ ...shareButton, background: '#00754A', color: 'white' }}>
+            {state.checkoutPending ? 'Checking…' : 'Retry submitted bill'}
+          </button>
+        </ModalOverlay>
+      ) : null}
     </main>
   );
 }
@@ -1451,7 +1478,8 @@ function FieldShell({
  */
 function TableSelectOverlay() {
   const { state, actions } = usePos();
-  const options = state.tables.filter((t) => t.status === 'available' || t.id === state.orderTable);
+  const options = state.tables.filter((t) => !t.orderId && (t.status === 'available' || state.orderTables.includes(t.id)));
+  const selected = state.tables.filter((t) => state.draftTableIds.includes(t.id));
 
   const zones = [...new Set(options.map((t) => t.zone))];
 
@@ -1493,10 +1521,10 @@ function TableSelectOverlay() {
         >
           <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 20, fontWeight: 800, color: 'rgba(0,0,0,0.87)' }}>
-              Choose a table
+              Choose tables
             </span>
             <span style={{ fontSize: 13, fontWeight: 500, color: 'rgba(0,0,0,0.58)' }}>
-              {plural(options.length, 'table')} free
+              Choose one or more tables for one shared bill
             </span>
           </span>
           <button
@@ -1522,7 +1550,7 @@ function TableSelectOverlay() {
                 color: 'rgba(0,0,0,0.58)',
               }}
             >
-              Every table is occupied. Settle a bill, or switch this order to takeaway.
+              No tables are available. Clear a vacant table, or switch this order to takeaway.
             </p>
           ) : (
             zones.map((zone) => (
@@ -1550,13 +1578,14 @@ function TableSelectOverlay() {
                   {options
                     .filter((t) => t.zone === zone)
                     .map((t) => {
-                      const active = t.id === state.orderTable;
+                      const active = state.draftTableIds.includes(t.id);
                       return (
                         <button
                           key={t.id}
                           type="button"
                           className="press hv-lift"
-                          onClick={() => actions.chooseTable(active ? null : t.id)}
+                          aria-pressed={active}
+                          onClick={() => actions.toggleDraftTable(t.id)}
                           style={{
                             padding: '12px 10px',
                             borderRadius: 12,
@@ -1599,6 +1628,17 @@ function TableSelectOverlay() {
               </div>
             ))
           )}
+        </div>
+        <div style={{ padding: 20, borderTop: '1px solid #edebe9', display: 'grid', gap: 12 }}>
+          <span aria-live="polite" style={{ fontSize: 14, fontWeight: 600 }}>
+            {selected.length ? `${selected.map((table) => table.name).join(' + ')} · ${selected.reduce((sum, table) => sum + table.seats, 0)} seats` : 'No tables selected'}
+          </span>
+          <span style={{ fontSize: 12, color: '#666' }}>Tables are claimed when you generate the bill.</span>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button type="button" className="press" onClick={actions.closeTablePicker} style={{ ...shareButton, flex: 1 }}>Cancel</button>
+            <button type="button" className="press" disabled={!selected.length} onClick={actions.confirmTables}
+              style={{ ...shareButton, flex: 1, background: '#00754A', color: 'white', opacity: selected.length ? 1 : 0.5 }}>Confirm tables</button>
+          </div>
         </div>
       </div>
     </div>

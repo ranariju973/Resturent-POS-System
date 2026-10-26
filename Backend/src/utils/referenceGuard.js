@@ -66,7 +66,7 @@ export async function assertCustomerUnreferenced(customerId) {
  * is currently in service.
  */
 export async function assertTableUnreferenced(tableId) {
-  if (await Order.exists({ table: tableId })) {
+  if (await Order.exists({ $or: [{ table: tableId }, { tableIds: tableId }] })) {
     throw ApiError.conflict(
       'This table appears on past orders and cannot be permanently deleted. ' +
         'It has been kept so receipts and reports still resolve.',

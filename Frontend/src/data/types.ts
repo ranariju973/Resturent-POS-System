@@ -115,6 +115,7 @@ export interface Ticket {
    */
   items: TicketItem[];
   placedAt: number;
+  expiresAt: number;
   waitingMinutes: number;
   wasRecalled: boolean;
   orderId: string;

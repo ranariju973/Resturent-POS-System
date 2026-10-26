@@ -7,6 +7,11 @@
  */
 import winston from 'winston';
 import { env } from '../config/env.js';
+import { redactText } from './logRedaction.js';
+
+const secrets = ['MONGO_URI', 'JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'PIN_PEPPER',
+  'INVOICE_TOKEN_PEPPER', 'DEVICE_TOKEN_PEPPER', 'CLOUDINARY_API_SECRET', 'SEED_ADMIN_PASSWORD']
+  .map((name) => env[name] ?? process.env[name]);
 
 const SENSITIVE_KEYS = new Set([
   'password',
@@ -28,12 +33,17 @@ const SENSITIVE_KEYS = new Set([
   // PII — customer records carry these and they should not sit in log storage.
   'phone',
   'email',
+  'phonenormalized',
+  'invoicetokenhash',
+  'devicetoken',
+  'credential',
+  'idtoken',
 ]);
 
 const REDACTED = '[REDACTED]';
 
 function redact(value, seen = new WeakSet()) {
-  if (value === null || typeof value !== 'object') return value;
+  if (value === null || typeof value !== 'object') return redactText(value, secrets);
   if (seen.has(value)) return '[Circular]';
   seen.add(value);
 
@@ -48,7 +58,8 @@ function redact(value, seen = new WeakSet()) {
 
 const redactFormat = winston.format((info) => {
   const { level, message, timestamp, stack, ...meta } = info;
-  return { level, message, timestamp, stack, ...redact(meta) };
+  return { level, message: redactText(message, secrets), timestamp,
+    stack: redactText(stack, secrets), ...redact(meta) };
 });
 
 const devFormat = winston.format.combine(
